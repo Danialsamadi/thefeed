@@ -179,6 +179,37 @@
       -webkit-tap-highlight-color: transparent
     }
 
+    /* Screen-reader-only: visually hidden but available to assistive tech. */
+    .sr-only {
+      position: absolute !important;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* Skip link: off-screen until focused, then reveals at the top-start. */
+    .skip-link {
+      position: fixed;
+      top: 8px; inset-inline-start: 8px;
+      z-index: 100000;
+      padding: 10px 16px;
+      background: var(--accent);
+      color: #fff;
+      border-radius: var(--radius-md);
+      font-size: var(--text-sm);
+      font-weight: var(--weight-semibold);
+      transform: translateY(-150%);
+      transition: transform var(--motion-fast) var(--ease);
+    }
+    .skip-link:focus {
+      transform: translateY(0);
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+
     /* Touch devices: clear :hover immediately so tap highlight doesn't stick */
     @media (hover: none) {
       button, a, [onclick] {

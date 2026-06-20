@@ -385,6 +385,7 @@ var I18N = {
     chat_change_server: 'تغییر',
     chat_rename: 'تغییر نام',
     close: 'بستن',
+    back: 'بازگشت', send: 'ارسال', skip_to_content: 'پرش به محتوای اصلی',
     chat_server_current: 'فعلی',
     chat_switch_checking: 'در حال بررسی سرور…',
     chat_switched_server: 'سرور گفتگو عوض شد',
@@ -822,6 +823,7 @@ var I18N = {
     chat_change_server: 'Change',
     chat_rename: 'Rename',
     close: 'Close',
+    back: 'Back', send: 'Send', skip_to_content: 'Skip to main content',
     chat_server_current: 'current',
     chat_switch_checking: 'Checking server…',
     chat_switched_server: 'Switched conversation server',
@@ -898,12 +900,17 @@ var lang = (function () {
 })();
 function t(k) { return (I18N[lang] && I18N[lang][k]) || I18N.en[k] || k }
 function applyLang() {
-  var isRtl = lang === 'fa';
+  // Before a language is chosen (first run), keep the document's static
+  // lang/dir rather than clobbering them with an empty string (WCAG 3.1.1
+  // requires a valid lang). Only override once we have a real selection.
+  var effLang = lang || document.documentElement.lang || 'fa';
+  var isRtl = effLang === 'fa';
   document.documentElement.dir = isRtl ? 'rtl' : 'ltr';
-  document.documentElement.lang = lang;
+  document.documentElement.lang = effLang;
   document.querySelectorAll('[data-i18n]').forEach(function (el) { el.textContent = t(el.dataset.i18n) });
   document.querySelectorAll('[data-i18n-ph]').forEach(function (el) { el.placeholder = t(el.dataset.i18nPh) });
   document.querySelectorAll('[data-i18n-title]').forEach(function (el) { el.title = t(el.dataset.i18nTitle) });
+  document.querySelectorAll('[data-i18n-aria]').forEach(function (el) { el.setAttribute('aria-label', t(el.dataset.i18nAria)) });
   document.querySelectorAll('[data-i18n-body]').forEach(function (el) { el.innerHTML = t(el.dataset.i18nBody) });
   var lf = document.getElementById('langFa'); if (lf) lf.classList.toggle('active-lang', lang === 'fa');
   var le = document.getElementById('langEn'); if (le) le.classList.toggle('active-lang', lang === 'en');

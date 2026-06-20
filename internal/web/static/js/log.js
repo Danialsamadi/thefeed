@@ -86,7 +86,7 @@ function updateResolverScanDisplay(line) {
     item.querySelector('.progress-label').textContent = t('scanning_resolvers') + ' 0/' + total;
     item.querySelector('.progress-fill').style.width = '0%';
     item.dataset.lastUpdate = Date.now();
-    resolverScanHint = t('scanning_resolvers') + '... <button onclick="jumpToLog()" style="background:none;border:none;cursor:pointer;font-size:13px;vertical-align:middle;padding:0 2px">' + icon('log') + '</button>';
+    resolverScanHint = t('scanning_resolvers') + '... <button onclick="jumpToLog()" aria-label="' + t('sidebar_log') + '" style="background:none;border:none;cursor:pointer;font-size:13px;vertical-align:middle;padding:0 2px">' + icon('log') + '</button>';
     var hintEl = document.getElementById('no-ch-hint'); if (hintEl) hintEl.innerHTML = resolverScanHint;
     return;
   }
@@ -105,7 +105,7 @@ function updateResolverScanDisplay(line) {
     item.querySelector('.progress-label').textContent = label;
     item.querySelector('.progress-fill').style.width = pct + '%';
     item.dataset.lastUpdate = Date.now();
-    resolverScanHint = t('scanning_resolvers') + ' (' + done + '/' + tot + ', \u2713' + resolverScanHealthy + ')' + ' <button onclick="jumpToLog()" style="background:none;border:none;cursor:pointer;font-size:13px;vertical-align:middle;padding:0 2px">' + icon('log') + '</button>';
+    resolverScanHint = t('scanning_resolvers') + ' (' + done + '/' + tot + ', \u2713' + resolverScanHealthy + ')' + ' <button onclick="jumpToLog()" aria-label="' + t('sidebar_log') + '" style="background:none;border:none;cursor:pointer;font-size:13px;vertical-align:middle;padding:0 2px">' + icon('log') + '</button>';
     var hintEl = document.getElementById('no-ch-hint'); if (hintEl) hintEl.innerHTML = resolverScanHint;
     return;
   }
@@ -125,7 +125,7 @@ function updateResolverScanDisplay(line) {
     resolverScanHint = '';
     // Remove init loading bar if it's still around
     var initItem = document.getElementById('prog-init'); if (initItem) initItem.remove();
-    var hintEl = document.getElementById('no-ch-hint'); if (hintEl) hintEl.innerHTML = t('no_channels_hint') + ' <button onclick="jumpToLog()" style="background:none;border:none;cursor:pointer;font-size:13px;vertical-align:middle;padding:0 2px">' + icon('log') + '</button> ' + t('no_channels_hint2');
+    var hintEl = document.getElementById('no-ch-hint'); if (hintEl) hintEl.innerHTML = t('no_channels_hint') + ' <button onclick="jumpToLog()" aria-label="' + t('sidebar_log') + '" style="background:none;border:none;cursor:pointer;font-size:13px;vertical-align:middle;padding:0 2px">' + icon('log') + '</button> ' + t('no_channels_hint2');
     setTimeout(function () { if (item.parentNode) item.parentNode.removeChild(item) }, 2000);
     // Scan is done — reload the list in case the SSE 'update' event was dropped.
     // Don't auto-open a channel: a programmatic open racing a user Back caused

@@ -149,7 +149,7 @@ function _renderChannelsNow() {
   var savedBtn = document.getElementById('savedChannelBtn');
   if (savedBtn) savedBtn.remove();
   if (!channels || !channels.length) {
-    var _hint = resolverScanHint || (t('no_channels_hint') + ' <button onclick="jumpToLog()" style="background:none;border:none;cursor:pointer;font-size:13px;vertical-align:middle;padding:0 2px">' + icon('log') + '</button> ' + t('no_channels_hint2'));
+    var _hint = resolverScanHint || (t('no_channels_hint') + ' <button onclick="jumpToLog()" aria-label="' + t('sidebar_log') + '" style="background:none;border:none;cursor:pointer;font-size:13px;vertical-align:middle;padding:0 2px">' + icon('log') + '</button> ' + t('no_channels_hint2'));
     el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);font-size:13px">' + t('no_channels') + '<br><span id="no-ch-hint" style="font-size:11px;opacity:.7;line-height:1.8">' + _hint + '</span></div>';
     if (savedBtn) el.insertBefore(savedBtn, el.firstChild);
     return

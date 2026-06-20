@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#17212b">
   <meta name="theme-color" content="#17212b" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
@@ -23,6 +23,11 @@
 </head>
 
 <body>
+
+  <!-- Skip link: first focusable element, jumps keyboard users to the feed. -->
+  <a class="skip-link" href="#main" data-i18n="skip_to_content" data-i18n-aria="skip_to_content">Skip to main content</a>
+  <!-- Document-level heading for assistive tech (visually hidden). -->
+  <h1 class="sr-only">thefeed</h1>
 
   <!-- First-launch language picker. Visible until lang is set; pure HTML/JS
        so it works on iOS, Android, and the browser without native code. -->
@@ -92,7 +97,7 @@
   <div class="app" id="app">
 
     <!-- SIDEBAR -->
-    <div class="sidebar" id="sidebar">
+    <div class="sidebar" id="sidebar" role="navigation" aria-label="Channels and sections">
       <div class="sidebar-header">
         <div class="sidebar-header-top">
           <button class="profile-btn" id="profileBtn" onclick="openProfiles()">
@@ -123,7 +128,7 @@
           <!-- END chat -->
         </div>
         <input class="sidebar-search" id="channelSearch" type="text" data-i18n-ph="search" placeholder="Search..."
-          oninput="filterChannels()">
+          data-i18n-aria="search" aria-label="Search" oninput="filterChannels()">
       </div>
       <div class="channel-list" id="channelList">
         <div class="saved-channel-entry" id="savedChannelBtn" role="button" tabindex="0"
@@ -147,9 +152,9 @@
     </div>
 
     <!-- CHAT AREA -->
-    <div class="chat-area">
+    <div class="chat-area" id="main" role="main">
       <div class="chat-header">
-        <button class="back-btn" onclick="feedBack()" data-icon="arrowLeft"></button>
+        <button class="back-btn" onclick="feedBack()" data-icon="arrowLeft" aria-label="Back" data-i18n-aria="back"></button>
         <div class="chat-header-info">
           <div class="chat-header-name" id="chatName">thefeed</div>
           <div class="chat-header-sub" id="chatSub"></div>
@@ -157,7 +162,7 @@
         <div class="chat-header-actions">
           <span class="next-fetch-label" id="nextFetchTimer"></span><span class="next-fetch-info" id="nextFetchInfoBtn"
             style="display:none" data-i18n-title="next_fetch_info" title="" onclick="showToast(t('next_fetch_info'))"
-            tabindex="0" data-icon="info"></span>
+            role="button" tabindex="0" data-i18n-aria="next_fetch_info" aria-label="Next fetch info" data-icon="info"></span>
           <button class="icon-btn header-search-btn" onclick="toggleMsgSearch()" title="Search"
             data-i18n-title="search_messages"
             style="width:auto;height:30px;font-size:12px;padding:0 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface)"
@@ -180,7 +185,7 @@
       </div>
       <div class="msg-search-bar" id="msgSearchBar">
         <input type="text" id="msgSearchInput" data-i18n-ph="search_messages" placeholder="Search messages..."
-          oninput="doMsgSearch()">
+          data-i18n-aria="search_messages" aria-label="Search messages" oninput="doMsgSearch()">
         <div class="search-nav">
           <span id="msgSearchCount"></span>
           <button onclick="msgSearchPrev()" title="Previous" data-icon="chevronUp"></button>
@@ -198,8 +203,8 @@
       <div class="floating-date" id="floatingDate" dir="auto" hidden></div>
       <div class="send-panel" id="sendPanel">
         <input class="send-input" id="sendInput" data-i18n-ph="write_message" placeholder="Write a message..."
-          maxlength="4000">
-        <button class="send-btn" onclick="sendMessage()" data-icon="send"></button>
+          data-i18n-aria="write_message" aria-label="Write a message" maxlength="4000">
+        <button class="send-btn" onclick="sendMessage()" data-icon="send" aria-label="Send" data-i18n-aria="send"></button>
       </div>
       <button class="scroll-down-btn" id="scrollDownBtn" onclick="scrollToBottom()" title="Jump to latest"><span
           data-icon="arrowDown"></span><span class="scroll-down-badge" id="scrollDownBadge"></span></button>
@@ -275,7 +280,7 @@
   </div>
 
   <!-- TOAST -->
-  <div id="toast"></div>
+  <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <!-- BEGIN chat -->
   <div id="chatModal" class="chat-modal"></div>
@@ -302,15 +307,16 @@
           Telegram channels. Depends on third-party services and may stop working or be rate-limited. For reliable
           access, use the core thefeed feature.</p>
         <div class="tm-add-row">
-          <input id="tmAddInput" type="text" data-i18n-ph="telemirror_add_ph" placeholder="@username" maxlength="40">
+          <input id="tmAddInput" type="text" data-i18n-ph="telemirror_add_ph" placeholder="@username" maxlength="40"
+            data-i18n-aria="telemirror_add_ph" aria-label="Channel username to add">
           <button class="btn btn-primary" onclick="telemirrorAdd()" data-i18n="add">Add</button>
         </div>
         <div id="tmChannelsList" class="tm-channels-list"></div>
       </aside>
       <div class="tm-backdrop" onclick="toggleTmSidebar()" aria-hidden="true"></div>
-      <main id="tmContent" class="tm-content">
+      <div id="tmContent" class="tm-content" role="region" aria-label="Channel posts">
         <div class="tm-empty" data-i18n="telemirror_pick_channel">Pick a channel</div>
-      </main>
+      </div>
       <button class="tm-scroll-down" id="tmScrollDownBtn" onclick="tmScrollToBottom()" aria-label="Scroll to latest"
         title="Scroll to latest" data-icon="arrowDown"></button>
     </div>
@@ -397,8 +403,10 @@
           <div class="settings-section-title"><span data-i18n="app_password">App Password</span></div>
           <div id="passwordSetSection" style="margin-top:8px">
             <input type="password" id="appPasswordInput" placeholder="" data-i18n-ph="password_new_ph"
+              data-i18n-aria="password_new_ph" aria-label="New password"
               style="width:100%;padding:8px 12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;margin-bottom:6px">
             <input type="password" id="appPasswordConfirm" placeholder="" data-i18n-ph="password_confirm_ph"
+              data-i18n-aria="password_confirm_ph" aria-label="Confirm password"
               style="width:100%;padding:8px 12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box">
             <div id="passwordError" style="color:var(--error);font-size:12px;margin-top:4px;display:none"></div>
             <div style="margin-top:8px">
@@ -417,6 +425,7 @@
             </div>
             <div id="passwordRemovePrompt" style="display:none;margin-top:8px">
               <input type="password" id="appPasswordCurrent" placeholder="" data-i18n-ph="password_current_ph"
+                data-i18n-aria="password_current_ph" aria-label="Current password"
                 style="width:100%;padding:8px 12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box">
               <div id="passwordRemoveError" style="color:var(--error);font-size:12px;margin-top:4px;display:none"></div>
               <div style="display:flex;gap:6px;margin-top:8px">
@@ -525,6 +534,7 @@
             <span style="font-size:14px;color:var(--text)" data-i18n="storage_budget">Budget</span>
             <span style="display:flex;align-items:center;gap:8px">
               <input type="text" inputmode="numeric" pattern="[0-9]*" id="storageBudgetInput" value="1024" dir="ltr"
+                data-i18n-aria="storage_budget" aria-label="Storage budget in MB"
                 style="width:64px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;text-align:center;-moz-appearance:textfield">
               <span style="font-size:13px;color:var(--text-dim)">MB</span>
               <button class="btn btn-primary btn-sm" onclick="saveCacheBudget()" data-i18n="apply" style="padding:6px 14px;font-size:13px">Apply</button>
@@ -576,7 +586,8 @@
         <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px" data-i18n="import_uri_label">Import URI
         </div>
         <div class="import-row">
-          <input id="importUriInput" placeholder="thefeed://..." data-i18n-ph="import_uri_ph">
+          <input id="importUriInput" placeholder="thefeed://..." data-i18n-ph="import_uri_ph"
+            data-i18n-aria="import_uri_ph" aria-label="Import URI">
           <button class="btn btn-flat btn-sm" type="button" onclick="pasteImportUri()" data-i18n-title="paste"
             title="Paste" aria-label="Paste" style="font-size:14px" data-icon="copy"></button>
           <button class="btn btn-primary btn-sm" onclick="doImportUri()" data-i18n="import">Import</button>
@@ -664,7 +675,8 @@
         <div class="info-note" id="peChannelNote" data-i18n="channel_mgmt_note">Channel management requires server-side
           support.</div>
         <div class="channel-editor-row" id="peAddChannelRow" style="display:none">
-          <input id="peAddChannelInput" data-i18n-ph="channel_placeholder" placeholder="channel_username">
+          <input id="peAddChannelInput" data-i18n-ph="channel_placeholder" placeholder="channel_username"
+            data-i18n-aria="channel_placeholder" aria-label="Channel username">
           <button class="btn btn-primary btn-sm" onclick="addChannelEditor()" data-i18n="add">Add</button>
         </div>
         <div id="peChannelList" style="max-height:150px;overflow-y:auto"></div>
@@ -768,7 +780,7 @@
         <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
           <div style="font-size:13px;font-weight:600;margin-bottom:6px" data-i18n="add_resolvers">Add Resolvers</div>
           <div style="display:flex;gap:6px">
-            <textarea id="bankAddResolvers" rows="2" placeholder="8.8.8.8&#10;1.1.1.1"
+            <textarea id="bankAddResolvers" rows="2" placeholder="8.8.8.8&#10;1.1.1.1" aria-label="Resolver IP addresses, one per line"
               style="flex:1;font-family:monospace;font-size:12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 8px"></textarea>
             <button class="btn btn-primary btn-sm" onclick="addResolversToBank()" style="align-self:flex-end"
               data-i18n="add">Add</button>
@@ -966,6 +978,7 @@
   <!-- BEGIN chat -->
   <script src="/static/js/chat.js"></script>
   <!-- END chat -->
+  <script src="/static/js/a11y.js"></script>
 </body>
 
 </html>
