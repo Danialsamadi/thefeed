@@ -315,17 +315,6 @@ func (c *mediaDiskCache) Remove(size int64, crc uint32) {
 	}
 }
 
-// Remove deletes a cached entry by (size, crc). Used by the saved-media
-// store to free bytes when an item is unsaved and no longer referenced.
-func (c *mediaDiskCache) Remove(size int64, crc uint32) {
-	if size <= 0 || crc == 0 {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_ = os.Remove(c.keyFile(size, crc))
-}
-
 // Cleanup removes entries older than ttl. Returns the count removed.
 func (c *mediaDiskCache) Cleanup() int {
 	if c.ttl <= 0 {
