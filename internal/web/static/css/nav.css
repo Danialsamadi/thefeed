@@ -1546,9 +1546,14 @@
     #profilesModal .modal-actions {
       position: sticky;
       bottom: 0;
-      margin: 0;
-      padding-top: 12px;
-      background: var(--card-bg, var(--bg2));
+      /* Span the full sheet width (cancel the modal's side padding) and match the
+         modal surface, so this reads as a seamless pinned footer with a hairline
+         divider — not a lighter, inset rectangle floating over the list. The
+         negative margin reaches the edges; the equal padding realigns the pills
+         with the configs above. */
+      margin: 0 calc(-1 * var(--space-5));
+      padding: 12px var(--space-5) 0;
+      background: var(--surface);
       border-top: 1px solid var(--border);
     }
 

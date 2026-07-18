@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 
@@ -64,10 +63,9 @@ func (pr *PublicReader) fetchPublicAvatar(ctx context.Context, username string) 
 	if username == "" {
 		return nil, nil
 	}
-	pageURL := pr.baseURL + "/" + url.PathEscape(username)
-	body, err := httpGetBody(ctx, pr.client, pageURL)
+	body, err := pr.fetchPageBody(ctx, username)
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", pageURL, err)
+		return nil, fmt.Errorf("fetch %s page: %w", username, err)
 	}
 	imgURL := extractPublicAvatarURL(body)
 	if imgURL == "" {
@@ -124,11 +122,6 @@ func (pr *PublicReader) fetchAllPublicProfilePhotos(ctx context.Context) {
 	}
 	total := pr.feed.MergeProfilePics(pics)
 	log.Printf("[public profile-pic] cycle done: %d new, %d total in bundle", len(pics), total)
-}
-
-// httpGetBody is a tiny GET helper. Cap is 8 MB.
-func httpGetBody(ctx context.Context, c *http.Client, url string) ([]byte, error) {
-	return httpGetWithLimit(ctx, c, url, 8*1024*1024)
 }
 
 func httpGetWithLimit(ctx context.Context, c *http.Client, u string, limit int64) ([]byte, error) {

@@ -52,18 +52,27 @@ android {
     }
 
     signingConfigs {
-        // Persistent project keystore — ensures all builds (debug & release) share the same signature
-        // so you can install updates without uninstalling first.
-        // For CI: override with env vars KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
+        // Release signing credentials come ONLY from the environment — never
+        // hardcoded in source. CI (GitHub/GitLab/Codemagic) sets KEYSTORE_PASSWORD
+        // / KEY_ALIAS / KEY_PASSWORD; for local release builds put them in a
+        // gitignored android/keystore.properties (storePassword/keyAlias/keyPassword).
+        // Missing keystore or credentials falls back to debug signing — the
+        // "android" password below is Google's universal public debug password,
+        // not a secret.
         release {
             def ksFile = file("keystore.jks")
-            if (ksFile.exists()) {
+            def props = new Properties()
+            def propsFile = rootProject.file("keystore.properties")
+            if (propsFile.exists()) { propsFile.withInputStream { props.load(it) } }
+            def storePw = System.getenv("KEYSTORE_PASSWORD") ?: props.getProperty("storePassword")
+            def alias   = System.getenv("KEY_ALIAS")         ?: props.getProperty("keyAlias")
+            def keyPw   = System.getenv("KEY_PASSWORD")      ?: props.getProperty("keyPassword")
+            if (ksFile.exists() && storePw && alias && keyPw) {
                 storeFile ksFile
-                storePassword System.getenv("KEYSTORE_PASSWORD") ?: "thefeed123"
-                keyAlias System.getenv("KEY_ALIAS") ?: "thefeed"
-                keyPassword System.getenv("KEY_PASSWORD") ?: "thefeed123"
+                storePassword storePw
+                keyAlias alias
+                keyPassword keyPw
             } else {
-                // Fallback to debug keystore for consistent local/CI builds without the project keystore
                 def debugKs = new File(System.getProperty("user.home"), ".android/debug.keystore")
                 storeFile debugKs
                 storePassword "android"

@@ -1,0 +1,206 @@
+# Codemagic CI/CD for thefeed.
+#
+# Two workflows:
+#   ios-testflight    → builds a SIGNED .ipa and uploads it to TestFlight
+#   android-googleplay → builds a SIGNED .aab and uploads it to Google Play (internal track)
+#
+# This is NOT a plain iOS/Android project: the app embeds a Go HTTP server
+# compiled with `gomobile`. Codemagic machines ship Xcode, the Android
+# SDK/NDK and JDK, but NOT Go — so every workflow first installs Go +
+# gomobile and produces the native binding (ios/Mobile.xcframework or
+# android/app/libs/mobile.aar) before the normal Xcode / Gradle build.
+#
+# Full setup steps (keys, API keys, what to click) are in
+# docs/codemagic-setup.md — read that first.
+
+definitions:
+  # Pinned Go toolchain (must match go.mod). Codemagic mac machines are
+  # Apple-silicon, so we fetch the darwin-arm64 tarball.
+  go_version: &go_version "1.26.1"
+
+  scripts:
+    - &derive_version
+      name: Derive marketing version from the selected tag
+      script: |
+        set -e
+        # Start a build in the Codemagic UI and pick a release tag (vX.Y.Z);
+        # CM_TAG carries it here. A leading v (or an old app-v) is stripped so
+        # v0.31.0 → marketing version 0.31.0.
+        VER="${CM_TAG#app-}"
+        VER="${VER#v}"
+        if [ -z "$CM_TAG" ]; then
+          VER="0.0.1"   # started on a branch, no tag — debug builds only
+          echo "WARNING: no tag selected; using fallback version $VER"
+        else
+          case "$VER" in
+            *[!0-9.]*|"") echo "Pick a vX.Y.Z tag (got: $CM_TAG)"; exit 1;;
+          esac
+        fi
+        echo "APP_MARKETING_VERSION=$VER" >> "$CM_ENV"
+        echo "Marketing version: $VER"
+    - &install_go
+      name: Install Go + gomobile
+      script: |
+        set -e
+        GO_VERSION="1.26.1"
+        curl -fsSL "https://go.dev/dl/go${GO_VERSION}.darwin-arm64.tar.gz" -o /tmp/go.tgz
+        sudo rm -rf /usr/local/go
+        sudo tar -C /usr/local -xzf /tmp/go.tgz
+        # Persist PATH to later steps via Codemagic's env file.
+        echo "PATH=/usr/local/go/bin:$HOME/go/bin:$PATH" >> "$CM_ENV"
+        export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+        go version
+        go install golang.org/x/mobile/cmd/gomobile@latest
+        go install golang.org/x/mobile/cmd/gobind@latest
+
+workflows:
+  # ===========================================================================
+  # iOS → TestFlight
+  # ===========================================================================
+  ios-testflight:
+    name: iOS · TestFlight
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+    # No `triggering:` — this workflow is manual-only. Start it from the
+    # Codemagic UI and pick the release tag when you want a store build; the
+    # tag drives the marketing version (see derive_version). GitHub/GitLab
+    # still build every v* tag for the desktop/self-host binaries.
+    # Must match the App Store Connect API key's reference name under
+    # Codemagic → Teams → Integrations → Developer Portal (exact string).
+    # This project uses its own dedicated key — do not reuse other projects'.
+    integrations:
+      app_store_connect: "CodeMagic API Key"
+    environment:
+      xcode: latest
+      ios_signing:
+        # Codemagic auto-creates/fetches the distribution certificate and
+        # an App Store provisioning profile for this bundle id using the
+        # App Store Connect API key above.
+        distribution_type: app_store
+        bundle_identifier: com.thefeed.ios
+      vars:
+        BUNDLE_ID: "com.thefeed.ios"
+        XCODE_PROJECT: "ios/Thefeed.xcodeproj"
+        XCODE_SCHEME: "Thefeed"
+    cache:
+      cache_paths:
+        - $HOME/go/pkg/mod
+        - $HOME/Library/Caches/go-build
+    scripts:
+      - *derive_version
+      - *install_go
+      - name: Build Mobile.xcframework (gomobile)
+        script: |
+          set -e
+          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+          gomobile init
+          go get golang.org/x/mobile/bind golang.org/x/mobile/bind/objc
+          go mod tidy
+          COMMIT=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-X github.com/sartoopjj/thefeed/internal/version.Version=v${APP_MARKETING_VERSION} -X github.com/sartoopjj/thefeed/internal/version.Commit=${COMMIT} -X github.com/sartoopjj/thefeed/internal/version.Date=${DATE}"
+          gomobile bind -iosversion=13.0 -target=ios,iossimulator -ldflags="${LDFLAGS}" -o ios/Mobile.xcframework ./mobile
+      - name: Set up provisioning profiles
+        script: xcode-project use-profiles
+      - name: Build signed IPA
+        script: |
+          set -e
+          # CFBundleVersion must strictly increase per TestFlight upload for a
+          # given marketing version. $BUILD_NUMBER is Codemagic's per-project
+          # auto-incrementing counter — reliable and monotonic.
+          BUILD_NUMBER=$(($BUILD_NUMBER + 1))
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --archive-xcargs "CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES MARKETING_VERSION=${APP_MARKETING_VERSION} CURRENT_PROJECT_VERSION=${BUILD_NUMBER}"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      app_store_connect:
+        auth: integration
+        # Uploads the build to TestFlight. Leave submit_to_app_store off until
+        # you are ready for a public App Store release.
+        submit_to_testflight: true
+        # Optional: auto-add the build to internal tester groups you created
+        # in App Store Connect (must already exist). Uncomment + edit:
+        # beta_groups:
+        #   - Internal Testers
+
+  # ===========================================================================
+  # Android → Google Play (internal track)
+  # ===========================================================================
+  android-googleplay:
+    name: Android · Google Play
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+    # Manual-only (no `triggering:`) — start from the Codemagic UI and pick a
+    # release tag. See the iOS workflow's note above.
+    environment:
+      android_signing:
+        - "TheFeed Keystore"
+      groups:
+        - google_credentials
+      vars:
+        PACKAGE_NAME: "com.thefeed.android"
+        # JDK 17 is the version AGP needs (jlink breaks on JDK 24+).
+        JAVA_HOME: "/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home"
+    cache:
+      cache_paths:
+        - $HOME/go/pkg/mod
+        - $HOME/Library/Caches/go-build
+        - $HOME/.gradle/caches
+    scripts:
+      - *derive_version
+      - *install_go
+      - name: Build gomobile AAR
+        script: |
+          set -e
+          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+          : "${ANDROID_SDK_ROOT:=/usr/local/share/android-sdk}"
+          export ANDROID_SDK_ROOT ANDROID_HOME="$ANDROID_SDK_ROOT"
+          # gomobile needs the NDK; pick the highest installed version.
+          export ANDROID_NDK_HOME="$(ls -d "$ANDROID_SDK_ROOT"/ndk/* | sort -V | tail -1)"
+          echo "Using NDK: $ANDROID_NDK_HOME"
+          gomobile init
+          COMMIT=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # -s -w strips symbols (~12 MB/ABI); max-page-size=16384 keeps the
+          # .so loadable on Android 15+ 16 KB-page devices.
+          LDFLAGS="-s -w -X github.com/sartoopjj/thefeed/internal/version.Version=v${APP_MARKETING_VERSION} -X github.com/sartoopjj/thefeed/internal/version.Commit=${COMMIT} -X github.com/sartoopjj/thefeed/internal/version.Date=${DATE} -extldflags=-Wl,-z,max-page-size=16384"
+          mkdir -p android/app/libs
+          gomobile bind -target=android/arm,android/arm64,android/386,android/amd64 -androidapi 24 \
+            -ldflags="${LDFLAGS}" -o android/app/libs/mobile.aar ./mobile
+      - name: Wire signing keystore
+        script: |
+          set -e
+          cp "$CM_KEYSTORE_PATH" android/app/keystore.jks
+          echo "KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD" >> "$CM_ENV"
+          echo "KEY_ALIAS=$CM_KEY_ALIAS" >> "$CM_ENV"
+          echo "KEY_PASSWORD=$CM_KEY_PASSWORD" >> "$CM_ENV"
+          echo "Keystore wired ($(wc -c < android/app/keystore.jks) bytes)"
+      - name: Build signed AAB
+        script: |
+          set -e
+          : "${ANDROID_SDK_ROOT:=/usr/local/share/android-sdk}"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+          # Play requires a strictly increasing versionCode. Read the latest
+          # one already on Play and add 1; on the very first upload (nothing on
+          # Play yet) fall back to Codemagic's BUILD_NUMBER.
+          LATEST=$(google-play get-latest-build-number --package-name "$PACKAGE_NAME" 2>/dev/null || true)
+          if [ -z "$LATEST" ]; then VC=$BUILD_NUMBER; else VC=$(($LATEST + 1)); fi
+          echo "versionCode = $VC"
+          cd android
+          [ -x ./gradlew ] || gradle wrapper --gradle-version 8.10.2
+          ./gradlew --no-daemon bundleRelease \
+            -PversionCode=$VC -PversionName="$APP_MARKETING_VERSION"
+    artifacts:
+      - android/app/build/outputs/**/*.aab
+      - android/app/build/outputs/**/mapping.txt
+    publishing:
+      google_play:
+        credentials: $GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS
+        track: internal
+        # Keep builds out of auto-rollout until you promote them in the console.
+        submit_as_draft: true

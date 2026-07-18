@@ -11,7 +11,9 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  z-index: 200;
+  /* Above the floating nav (9300) — a long-press menu near the bottom would
+     otherwise open under the nav bar. */
+  z-index: 9400;
   min-width: 160px;
   overflow: hidden;
   animation: ctx-in var(--motion-fast) var(--ease);
@@ -815,7 +817,8 @@ html[dir="rtl"] .sm-saved-root, .sm-saved-root[dir="rtl"] { --grad-end: left; }
 .saved-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 500;
+  /* Above the floating nav (9300) — see .modal-overlay in components.css. */
+  z-index: 9400;
   background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: center;

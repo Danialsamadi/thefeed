@@ -7,6 +7,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -154,6 +155,10 @@ func (h *telemirrorHub) handleChannel(w http.ResponseWriter, r *http.Request) {
 	// No cache yet — must wait for the first fetch.
 	res, err := h.refresh(username)
 	if err != nil {
+		if errors.Is(err, telemirror.ErrChannelNotFound) {
+			http.Error(w, "channel not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), 502)
 		return
 	}
@@ -460,6 +465,10 @@ func (h *telemirrorHub) handleOlder(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	body, err := h.client.FetchHTMLBefore(ctx, username, beforeID)
 	if err != nil {
+		if errors.Is(err, telemirror.ErrChannelNotFound) {
+			http.Error(w, "channel not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), 502)
 		return
 	}

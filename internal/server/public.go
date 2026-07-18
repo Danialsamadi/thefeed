@@ -1,9 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -25,8 +26,11 @@ type PublicReader struct {
 	msgLimit int
 	baseCh   int
 
-	client  *http.Client
-	baseURL string
+	client     *http.Client
+	pageClient *http.Client // refuses cross-host redirects; see newPageClient
+	baseURLs   []string
+	baseMu     sync.Mutex
+	basePref   int // index into baseURLs to try first (last one that worked)
 
 	mu            sync.RWMutex
 	cache         map[string]cachedMessages
@@ -68,7 +72,12 @@ func NewPublicReader(channelUsernames []string, feed *Feed, msgLimit int, baseCh
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		baseURL:   "https://t.me/s",
+		pageClient: newPageClient(),
+		baseURLs: []string{
+			"https://telegram.me/s",
+			"https://telegram.dog/s",
+			"https://t.me/s",
+		},
 		cache:         make(map[string]cachedMessages),
 		cacheTTL:      10 * time.Minute,
 		fetchInterval: 10 * time.Minute,
@@ -175,24 +184,95 @@ func (pr *PublicReader) fetchAll(ctx context.Context) {
 	pr.feed.AfterFetchCycle(ctx)
 }
 
+// fetchPageBody GETs /s/<username> across the configured base domains
+// (telegram.me, telegram.dog, t.me), returning the first response that
+// looks like a real Telegram channel page. The domain that worked is
+// remembered and tried first next time; failures from every domain are
+// joined so the caller sees why each was rejected.
+func (pr *PublicReader) fetchPageBody(ctx context.Context, username string) ([]byte, error) {
+	const maxPageBytes = 8 * 1024 * 1024
+	var errs []error
+	for _, base := range pr.orderedBaseURLs() {
+		body, err := httpGetWithLimit(ctx, pr.pageClient, base+"/"+url.PathEscape(username), maxPageBytes)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", base, err))
+			continue
+		}
+		if !isChannelPage(body) {
+			// A 2xx that isn't Telegram markup (parked domain, captive
+			// portal, interstitial) — try the next domain instead.
+			errs = append(errs, fmt.Errorf("%s: not a Telegram channel page", base))
+			continue
+		}
+		pr.markBaseURL(base)
+		return body, nil
+	}
+	if len(errs) == 0 {
+		return nil, fmt.Errorf("telemirror public: no base domains configured")
+	}
+	return nil, errors.Join(errs...)
+}
+
+// newPageClient builds the HTTP client used for channel-page fetches. A
+// live channel page is served with 200 directly, so the only redirect a
+// base domain emits is the "channel not found" bounce onto another host
+// (e.g. telegram.me/s/<x> → t.me/<x>). Following that into a dead t.me
+// would hang until the timeout, so cross-host redirects are refused and
+// surface as a non-2xx response, letting fetchPageBody fall through fast.
+// (The main client keeps default redirect behavior for CDN media/avatars,
+// which do legitimately redirect across hosts.)
+func newPageClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+}
+
+// isChannelPage reports whether body is Telegram's t.me/s web markup,
+// distinguishing a real channel page (even an empty one — the channel
+// header still renders) from a non-Telegram 2xx response.
+func isChannelPage(body []byte) bool {
+	return bytes.Contains(body, []byte("tgme_"))
+}
+
+// orderedBaseURLs returns baseURLs with the last-successful domain moved
+// to the front, so a healthy domain isn't re-probed behind a dead one.
+func (pr *PublicReader) orderedBaseURLs() []string {
+	pr.baseMu.Lock()
+	pref := pr.basePref
+	pr.baseMu.Unlock()
+	if pref <= 0 || pref >= len(pr.baseURLs) {
+		return pr.baseURLs
+	}
+	out := make([]string, 0, len(pr.baseURLs))
+	out = append(out, pr.baseURLs[pref])
+	for i, b := range pr.baseURLs {
+		if i != pref {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// markBaseURL records base as the preferred first attempt for next time.
+func (pr *PublicReader) markBaseURL(base string) {
+	pr.baseMu.Lock()
+	defer pr.baseMu.Unlock()
+	for i, b := range pr.baseURLs {
+		if b == base {
+			pr.basePref = i
+			return
+		}
+	}
+}
+
 func (pr *PublicReader) fetchChannel(ctx context.Context, username string) ([]protocol.Message, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pr.baseURL+"/"+url.PathEscape(username), nil)
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; thefeed/1.0; +https://github.com/sartoopjj/thefeed)")
-
-	resp, err := pr.client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("unexpected HTTP status: %s", resp.Status)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := pr.fetchPageBody(ctx, username)
 	if err != nil {
 		return nil, "", err
 	}

@@ -87,6 +87,13 @@ function showToast(msg, ms) {
   if (_toastTimer) clearTimeout(_toastTimer);
   _toastTimer = setTimeout(function () { el.classList.remove('show'); _toastTimer = null; }, ms || 2200);
 }
+// hideToast dismisses the current toast early — used when a long-lived
+// progress toast ("finding the post…") is resolved by success.
+function hideToast() {
+  var el = document.getElementById('toast');
+  if (el) el.classList.remove('show');
+  if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
+}
 
 // ===== UTILITIES =====
 function formatTitleWithFlag(s) {
@@ -140,18 +147,103 @@ function findChannelByUsername(username) {
   }
   return 0;
 }
-function scrollToMsg(id) {
+// parseTgLink parses a t.me / telegram.me URL → { user, postId } or null.
+// Handles /s/ web-preview links, trailing slashes, query strings and
+// fragments. Special Telegram paths (proxy, share, joinchat, …) are not
+// channel links. Shared by the feed and telemirror link handlers.
+var _tgSpecialPaths = /^(?:proxy|socks|share|addstickers|addemoji|addtheme|setlanguage|login|confirmphone|iv|joinchat|addlist|boost|contact|passport|premium|giftcode|invoice|stars|m|dl|bg|c)$/i;
+function parseTgLink(url) {
+  var m = String(url || '').match(/^https?:\/\/(?:t\.me|telegram\.me)\/(?:s\/)?([A-Za-z_][A-Za-z0-9_]{3,31})(?:\/(\d+))?\/?(?:\?[^#]*)?(?:#.*)?$/);
+  if (!m) return null;
+  if (_tgSpecialPaths.test(m[1])) return null;
+  return { user: m[1], postId: m[2] || '' };
+}
+// gotoChannelPost opens a feed channel and, when msgId is given, scrolls to
+// that post once messages render. Retries for a few seconds because the
+// post may only arrive with the background refresh that follows selection.
+function gotoChannelPost(chNum, msgId) {
+  // Re-select even for the current channel when the pane isn't showing its
+  // messages (e.g. the Saved view rendered its cards into #messages and
+  // closeSavedMessages only strips the class) — selectChannel restores it.
+  var mEl = document.getElementById('messages');
+  var paneOk = mEl && !mEl.classList.contains('saved-mode') && mEl.querySelector('.msg');
+  var reselected = !(chNum === selectedChannel && paneOk);
+  var p = reselected ? selectChannel(chNum) : Promise.resolve();
+  if (!msgId) return;
+  var done = false;
+  function finish(found) {
+    if (done) return;
+    done = true;
+    if (found) { if (reselected) hideToast(); return; } // clear the sticky "finding…"
+    if (reselected) hideToast();
+    // Stay silent if the user already navigated elsewhere.
+    if (selectedChannel === chNum) showToast(t('msg_not_in_cache') || 'Message no longer in cache');
+  }
+  // The verdict is timer-guaranteed: even if selectChannel hangs on a slow
+  // refresh or a retry step dies, the user gets the error — a lone
+  // "finding…" with no outcome reads as "no error shown".
+  var deadline = reselected ? 8000 : 1500;
+  setTimeout(function () { finish(false); }, deadline);
+  // Sticky for the whole wait: the default 2.2s toast faded mid-search and
+  // the silent gap until the verdict read as "no error shown".
+  if (reselected) showToast(t('finding_post') || 'Finding the post…', deadline + 500);
+  Promise.resolve(p).catch(function () { }).then(function () {
+    var checkedCache = false;
+    (function attempt() {
+      if (done) return;
+      if (selectedChannel !== chNum) { done = true; if (reselected) hideToast(); return; } // user navigated away
+      if (scrollToMsg(msgId)) { finish(true); return; }
+      if (checkedCache) { setTimeout(attempt, 500); return; }
+      checkedCache = true;
+      // Cache check, once — the response carries the whole message window,
+      // so per-retry fetches would churn megabytes on a phone. Valid once:
+      // the oldest cached ID only rises, and a post older than it can never
+      // arrive via refresh (bounded server window) — fail now instead of
+      // burning the whole retry window.
+      fetch('/api/messages/' + chNum).then(function (r) { return r.json(); }).then(function (d) {
+        if (done) return;
+        var ms = (d && d.messages) || [];
+        var oldest = Infinity;
+        for (var i = 0; i < ms.length; i++) { var mid = ms[i].ID || ms[i].id || 0; if (mid && mid < oldest) oldest = mid; }
+        if (ms.length && +msgId < oldest) { finish(false); return; }
+        setTimeout(attempt, 500);
+      }).catch(function () { if (!done) setTimeout(attempt, 500); });
+    })();
+  });
+}
+// Active jump-to-post highlight. renderMessages re-applies it when a
+// background refresh rebuilds the DOM mid-highlight — without this the
+// ring vanished after a few ms (or never painted) whenever the refresh
+// that selectChannel kicks off landed right after the jump.
+var _msgHighlight = null;
+function findMsgEl(id) {
   var els = document.querySelectorAll('.msg');
   for (var i = 0; i < els.length; i++) {
-    var meta = els[i].querySelector('.msg-meta');
-    if (meta && meta.textContent.indexOf('#' + id) !== -1) {
-      els[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
-      els[i].style.outline = '2px solid var(--accent)';
-      setTimeout(function (el) { el.style.outline = '' }, 1500, els[i]);
-      return true;
+    var spans = els[i].querySelectorAll('.msg-meta span');
+    for (var j = 0; j < spans.length; j++) {
+      // Exact match on the #ID span — a substring test would let #767
+      // hit #76737.
+      if (spans[j].textContent === '#' + id) return els[i];
     }
   }
-  return false;
+  return null;
+}
+function highlightMsgEl(el) {
+  el.classList.remove('msg-highlight');
+  void el.offsetWidth; // restart the animation on re-apply
+  el.classList.add('msg-highlight');
+}
+function scrollToMsg(id) {
+  var el = findMsgEl(id);
+  if (!el) return false;
+  // ch guards the re-apply: message IDs are per-channel, so a same-numbered
+  // message in another channel must not inherit the highlight.
+  _msgHighlight = { id: String(id), ch: selectedChannel, until: Date.now() + 2500 };
+  // Instant, not smooth: a long smooth scroll consumes the highlight window
+  // before arrival and janks the Android WebView compositor.
+  el.scrollIntoView({ block: 'center' });
+  highlightMsgEl(el);
+  return true;
 }
 function isPersian(text) { return text && (text.match(/[\u0600-\u06FF]/g) || []).length > text.length * 0.25 }
 

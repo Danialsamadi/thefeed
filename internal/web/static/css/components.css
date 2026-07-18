@@ -291,7 +291,11 @@
       position: fixed;
       inset: 0;
       background: rgba(0, 0, 0, .65);
-      z-index: 100;
+      /* Above the floating nav (9300): every modal must cover it, otherwise a
+         dialog created without an explicit lift (e.g. the update prompt) slides
+         UNDER the nav. Specific modals may still raise themselves further
+         (editor 9500, startup prompts 9600, confirm dialogs 99990). */
+      z-index: 9400;
       justify-content: center;
       align-items: center
     }
@@ -1221,6 +1225,7 @@
     }
 
     .link-sheet {
+      position: relative;
       background: var(--bg-elevated, var(--bg));
       border-radius: 14px 14px 0 0;
       width: 100%;
@@ -1229,10 +1234,38 @@
       box-shadow: 0 -4px 24px rgba(0,0,0,.25)
     }
 
+    /* Small close button, top-left of the sheet (matches the mirror sheet).
+       Physical left regardless of text direction. */
+    .link-sheet-close {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      width: 28px;
+      height: 28px;
+      border: none;
+      border-radius: 50%;
+      background: var(--bg);
+      color: var(--text-dim);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center
+    }
+
+    .link-sheet-close .icon svg {
+      width: 16px;
+      height: 16px
+    }
+
+    .link-sheet-close:hover {
+      color: var(--text)
+    }
+
     .link-title {
       font-size: 16px;
       font-weight: 600;
       margin-bottom: 10px;
+      padding-left: 32px;
       color: var(--text)
     }
 
@@ -1273,4 +1306,14 @@
     .link-open {
       background: var(--accent);
       color: #fff
+    }
+
+    /* Extra in-app action (open channel / go to post) — same look as the
+       telemirror sheet's add-channel button. */
+    .link-goto {
+      width: 100%;
+      margin-top: 8px;
+      border: 1px dashed var(--accent);
+      background: transparent;
+      color: var(--accent)
     }

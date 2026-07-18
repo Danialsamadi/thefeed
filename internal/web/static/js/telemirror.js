@@ -43,8 +43,8 @@
     return (typeof escAttr === 'function') ? escAttr(s) :
       tmEsc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
-  function tmToast(msg) {
-    if (typeof showToast === 'function') showToast(msg);
+  function tmToast(msg, ms) {
+    if (typeof showToast === 'function') showToast(msg, ms);
   }
 
   function tmInitial(name) {
@@ -495,6 +495,18 @@
       + '</pre></div>';
   }
 
+  // tmShowNotFound is the friendly (no raw error dump) state for a channel
+  // the proxy has no public web preview for — wrong @username, renamed, or
+  // private. Distinct from tmShowError, which is for transport failures.
+  function tmShowNotFound() {
+    var content = document.getElementById('tmContent');
+    content.innerHTML =
+      '<div class="tm-empty"><p>' + tmEsc(tmI18n('telemirror_channel_not_found', 'Channel not found.')) + '</p>'
+      + '<p style="margin-top:6px;color:var(--text-dim);font-size:13px">'
+      + tmEsc(tmI18n('telemirror_channel_not_found_hint', 'Check the username — it may not exist, was renamed, or is private.'))
+      + '</p></div>';
+  }
+
   async function tmSelect(username, opts) {
     opts = opts || {};
     tmActive = username;
@@ -507,6 +519,7 @@
       if (opts.refresh) url += '?refresh=1';
       var r = await fetch(url);
       if (!r.ok) {
+        if (r.status === 404) { tmShowNotFound(); return; }
         var errBody = '';
         try { errBody = await r.text(); } catch (e2) { }
         tmShowError(errBody || ('HTTP ' + r.status));
@@ -741,7 +754,10 @@
       // Footer: timestamp + view count.
       html += '<div class="tm-post-foot">';
       if (p.views) html += '<span class="tm-views">' + window.icon('views') + ' ' + tmEsc(p.views) + '</span>';
-      if (when) html += '<span class="tm-post-time">' + tmEsc(when) + '</span>';
+      // <bdi> isolates the localized date so its parts (day / month / year /
+      // time) keep their correct order inside the LTR-forced foot — a Jalali
+      // Persian date otherwise got bidi-scrambled in RTL mode.
+      if (when) html += '<span class="tm-post-time"><bdi>' + tmEsc(when) + '</bdi></span>';
       html += '</div>';
 
       html += '</div>';
@@ -978,7 +994,7 @@
   }
 
   function tmFallbackOpen(url) {
-    try { window.open(url, '_blank'); } catch (e) { window.location.href = url; }
+    openExternal(url); // shared impl in core.js — handles blocked popups/WebViews
   }
 
   window.tmCopyPost = function (btn) {
@@ -1250,26 +1266,83 @@
     }
   }
 
-  // Parse a t.me URL → { user, postId } or null.
-  // Excludes special Telegram paths (proxy, socks, share, etc.)
-  var _tgSpecialPaths = /^(?:proxy|socks|share|addstickers|addemoji|addtheme|setlanguage|login|confirmphone|iv|joinchat|addlist|boost|contact|passport|premium|giftcode|invoice|stars|m|dl|bg|c)$/i;
-  function tmParseTgLink(url) {
-    var m = url.match(/^https?:\/\/(?:t\.me|telegram\.me)\/([A-Za-z_][A-Za-z0-9_]{3,31})(?:\/(\d+))?(?:\?[^#]*)?(?:#.*)?$/);
-    if (!m) return null;
-    if (_tgSpecialPaths.test(m[1])) return null;
-    return { user: m[1], postId: m[2] || '' };
-  }
+  // Parse a t.me URL → { user, postId } or null. Shared impl in ui.js
+  // (handles /s/ links, trailing slashes, queries and special paths).
+  function tmParseTgLink(url) { return parseTgLink(url); }
 
   // Scroll to a post by its numeric message ID. Returns true if found.
+  // Instant jump — a smooth scroll over a long distance eats most of the
+  // 2s highlight before arrival and gets mistargeted when images above
+  // load mid-flight. After the jump, media above the post keeps expanding
+  // and drags it back out of view, so keep re-centering until the layout
+  // settles; any manual scroll from the user cancels that immediately.
+  var _tmSettleGen = 0;
   function tmScrollToPost(msgId) {
     if (!msgId) return false;
     var el = document.querySelector('.tm-post[data-msgid="' + msgId + '"]');
     if (!el) return false;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.scrollIntoView({ block: 'center' });
+    el.classList.remove('tm-post-highlight');
+    void el.offsetWidth; // restart the animation on repeat jumps
     el.classList.add('tm-post-highlight');
-    setTimeout(function () { el.classList.remove('tm-post-highlight'); }, 2000);
+    // A newer jump owns the viewport — bump the generation so an older
+    // settle loop can't tug-of-war against this one for up to 2s.
+    var gen = ++_tmSettleGen;
+    var until = Date.now() + 2000;
+    var cancelled = false;
+    var cancel = function () { cancelled = true; };
+    window.addEventListener('wheel', cancel, { once: true, passive: true });
+    window.addEventListener('touchstart', cancel, { once: true, passive: true });
+    (function settle() {
+      if (cancelled || gen !== _tmSettleGen || Date.now() > until) return;
+      var q = document.querySelector('.tm-post[data-msgid="' + msgId + '"]');
+      var host = document.querySelector('.tm-content');
+      if (!q || !host) return;
+      var r = q.getBoundingClientRect(), h = host.getBoundingClientRect();
+      var mid = (h.top + h.bottom) / 2, c = (r.top + r.bottom) / 2;
+      // Only correct real drift (image loads shift by tens/hundreds of px);
+      // small offsets are left alone so we don't fight normal jitter.
+      if (Math.abs(c - mid) > 48) q.scrollIntoView({ block: 'center' });
+      setTimeout(settle, 200);
+    })();
     return true;
   }
+
+  // Jump used after switching channels from the link sheet: posts render
+  // asynchronously after tmSelect, so retry until the target appears
+  // instead of a single 300ms shot (which often missed on slow loads).
+  function tmGotoPost(msgId) {
+    if (tmScrollToPost(msgId)) return; // already rendered — no toasts
+    // Immediate feedback + a timer-guaranteed verdict: the error must fire
+    // even if a retry step dies, else a lone "finding…" looks like a bug.
+    // The toast is sticky for the whole wait — a 2.2s fade left a silent
+    // gap before the verdict that read as "no error shown". 5s deadline:
+    // tmSelect already fetched the posts, nothing new arrives later.
+    var DEADLINE = 5000;
+    tmToast(tmI18n('finding_post', 'Finding the post…'), DEADLINE + 500);
+    // Bail (silently) if the user switches channels mid-search — both to
+    // skip a stale verdict and because msg numbers are per-channel, so a
+    // late retry could match a same-numbered post in the new channel.
+    var wantCh = tmActive;
+    var done = false;
+    var failT = setTimeout(function () {
+      done = true;
+      if (tmActive === wantCh) tmToast(tmI18n('telemirror_post_not_loaded', 'Post not loaded'));
+      else if (typeof hideToast === 'function') hideToast();
+    }, DEADLINE);
+    (function attempt() {
+      if (done) return;
+      if (tmActive !== wantCh || tmScrollToPost(msgId)) {
+        done = true;
+        clearTimeout(failT);
+        if (typeof hideToast === 'function') hideToast(); // clear the sticky "finding…"
+        return;
+      }
+      setTimeout(attempt, 400);
+    })();
+  }
+  window.tmScrollToPost = tmScrollToPost;
+  window.tmGotoPost = tmGotoPost;
 
   // Central link handler — decides what to do with a URL from a post.
   function tmHandleLink(url) {
@@ -1286,10 +1359,21 @@
     var old = document.getElementById('tmLinkSheet');
     if (old) old.remove();
     var tg = tmParseTgLink(url);
+    // When the linked channel is already in the mirror list the button
+    // opens it instead of re-adding. inList keeps the stored username's
+    // canonical case for tmSelect.
+    var inList = '';
+    if (tg) {
+      for (var ci = 0; ci < tmChannels.length; ci++) {
+        var cu = tmChannels[ci].username || '';
+        if (cu.toLowerCase() === tg.user.toLowerCase()) { inList = cu; break; }
+      }
+    }
     var overlay = document.createElement('div');
     overlay.id = 'tmLinkSheet';
     overlay.className = 'tm-link-overlay';
     var html = '<div class="tm-link-sheet">'
+      + '<button class="tm-link-close" type="button" aria-label="' + tmEsc(tmI18n('close', 'Close')) + '">' + window.icon('x') + '</button>'
       + '<div class="tm-link-title">' + tmEsc(tmI18n('telemirror_open_this_link', 'Open this link?')) + '</div>'
       + '<div class="tm-link-url" dir="ltr">' + tmEsc(url) + '</div>'
       + '<div class="tm-link-actions">'
@@ -1298,7 +1382,9 @@
       + '</div>';
     if (tg) {
       html += '<button class="tm-link-btn tm-link-add-ch">'
-        + tmEsc(tmI18n('telemirror_add_channel', 'Add @{u} to channels').replace('{u}', tg.user))
+        + tmEsc((inList
+          ? tmI18n('telemirror_open_channel', 'Open @{u}')
+          : tmI18n('telemirror_add_channel', 'Add @{u} to channels')).replace('{u}', tg.user))
         + '</button>';
     }
     html += '</div>';
@@ -1306,6 +1392,9 @@
     overlay.addEventListener('click', function (e) {
       if (e.target === overlay) overlay.remove();
     });
+    // Direct handler — a real click targets the svg inside the button, so
+    // target-class matching on the overlay never fires (see core.js note).
+    overlay.querySelector('.tm-link-close').onclick = function () { overlay.remove(); };
     overlay.querySelector('.tm-link-copy').onclick = function () {
       try {
         if (navigator.clipboard) { navigator.clipboard.writeText(url).catch(function () {}); }
@@ -1315,27 +1404,30 @@
       overlay.remove();
     };
     overlay.querySelector('.tm-link-open').onclick = function () {
-      var w = window.open(url, '_blank', 'noopener,noreferrer');
-      if (!w) window.location.href = url;
       overlay.remove();
+      openExternal(url); // shared impl in core.js — no double-open
     };
     if (tg) {
       overlay.querySelector('.tm-link-add-ch').onclick = async function () {
         overlay.remove();
         try {
-          var r = await fetch('/api/telemirror/channels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'add', username: tg.user })
-          });
-          if (!r.ok) { tmToast(tmI18n('telemirror_invalid_user', 'Invalid username')); return; }
-          await tmLoadChannels();
+          var user = inList;
+          if (!user) {
+            var r = await fetch('/api/telemirror/channels', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'add', username: tg.user })
+            });
+            if (!r.ok) { tmToast(tmI18n('telemirror_invalid_user', 'Invalid username')); return; }
+            await tmLoadChannels();
+            user = tg.user;
+          }
           // Switch to that channel and scroll to the post if specified
-          tmActive = tg.user;
+          tmActive = user;
           tmSaveActive();
-          await tmSelect(tg.user);
-          if (tg.postId) setTimeout(function () { tmScrollToPost(tg.postId); }, 300);
-          tmToast(tmI18n('telemirror_channel_added', '@{u} added').replace('{u}', tg.user));
+          await tmSelect(user);
+          if (tg.postId) setTimeout(function () { tmGotoPost(tg.postId); }, 300);
+          if (!inList) tmToast(tmI18n('telemirror_channel_added', '@{u} added').replace('{u}', tg.user));
         } catch (e) { tmToast((e && e.message) || 'failed'); }
       };
     }

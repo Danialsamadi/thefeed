@@ -64,7 +64,22 @@ function renderPollCard(pollBody) {
   return html;
 }
 
-// Intercept link clicks in the main feed messages area.
+// feedLinkTarget resolves a clicked link/mention to an in-feed destination.
+// Returns { user, postId, chNum } when the link points at a Telegram channel
+// (chNum is 0 when it isn't in the configured channel list), or null for
+// non-Telegram links.
+function feedLinkTarget(mention, href) {
+  var tg = mention ? { user: mention, postId: '' } : parseTgLink(href);
+  if (!tg) return null;
+  return { user: tg.user, postId: tg.postId, chNum: findChannelByUsername(tg.user) };
+}
+
+// Intercept link clicks in the main feed messages area. A post link inside
+// the channel that's already open jumps straight to the post (telemirror
+// parity). Everything else opens the link sheet; when the link resolves to
+// a configured channel the sheet gets an extra open-in-feed button, so the
+// user can still copy the link or open it in the browser instead of being
+// yanked to the channel.
 (function () {
   document.addEventListener('DOMContentLoaded', function () {
     var el = document.getElementById('messages');
@@ -74,19 +89,19 @@ function renderPollCard(pollBody) {
       if (!a) return;
       e.preventDefault();
       e.stopPropagation();
-      var mention = a.getAttribute('data-mention');
-      if (mention) {
-        var chNum = findChannelByUsername(mention);
-        if (chNum) { selectChannel(chNum); return; }
-      }
-      // For t.me/username links, also check if it's a configured channel.
       var href = a.href || a.getAttribute('href') || '';
-      var tme = href.match(/^https?:\/\/(?:t\.me|telegram\.me)\/([A-Za-z_][A-Za-z0-9_]{3,31})(?:\/(\d+))?(?:\?|$)/);
-      if (tme && !tme[2]) {
-        var chNum2 = findChannelByUsername(tme[1]);
-        if (chNum2) { selectChannel(chNum2); return; }
+      var tgt = feedLinkTarget(a.getAttribute('data-mention'), href);
+      if (tgt && tgt.postId && tgt.chNum === selectedChannel && scrollToMsg(tgt.postId)) return;
+      var extra = null;
+      if (tgt && tgt.chNum) {
+        extra = {
+          label: (tgt.postId
+            ? (t('feed_goto_post') || 'Go to post in @{u}')
+            : (t('telemirror_open_channel') || 'Open @{u}')).replace('{u}', tgt.user),
+          action: function () { gotoChannelPost(tgt.chNum, tgt.postId); }
+        };
       }
-      showLinkSheet(href);
+      showLinkSheet(href, extra);
     });
   }, { once: true });
 })();

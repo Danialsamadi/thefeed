@@ -79,6 +79,10 @@ type FetchResult struct {
 var (
 	ErrEmptyUsername = errors.New("empty username")
 	ErrPinnedChannel = errors.New("pinned channel cannot be removed")
+	// ErrChannelNotFound means the username has no public web preview — it
+	// doesn't exist, was renamed, or is private. The proxy signals this by
+	// redirecting the /s/ request instead of serving the 200 widget.
+	ErrChannelNotFound = errors.New("telemirror: channel not found or not available")
 )
 
 // SanitizeUsername strips @ / t.me/ prefixes and rejects characters not

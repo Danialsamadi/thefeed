@@ -659,8 +659,7 @@ function chatRenderIntro() {
   var html = '';
   html += '<div class="chat-topbar">';
   html += '<button class="chat-back chat-back-close" onclick="closeMessenger()" aria-label="close">' + icon('arrowLeft') + '</button>';
-  html += '<div class="chat-topbar-title"><div class="chat-peer-name">' + esc(chatT('chat_title')) +
-    ' <span class="chat-exp-tag">' + esc(chatT('chat_experimental')) + '</span></div></div>';
+  html += '<div class="chat-topbar-title"><div class="chat-peer-name">' + esc(chatT('chat_title')) + '</div></div>';
   html += '<button class="chat-icon-btn" title="' + escAttr(chatT('chat_log')) + '" onclick="chatOpenLog()">' + icon('log') + '</button>';
   html += '</div>';
   html += '<div class="chat-body" id="chatBody">';
@@ -727,11 +726,10 @@ function chatRenderList(keepView) {
   // Subtitle: the live probe's usable count once it lands; before that, if a
   // server is already set up, the disk-backed enabled count (instant, from
   // /api/chat/info) so a known-good setup never shows "checking…" on every open.
-  // Clean title — just "Chat" + the experimental tag. The server picker (and
-  // the live "N servers active / checking…" status) moved into the ⋮ menu.
+  // Clean title — just "Chat". The server picker (and the live "N servers
+  // active / checking…" status) moved into the ⋮ menu.
   html += '<div class="chat-topbar-title">' +
-    '<div class="chat-peer-name">' + esc(chatT('chat_title')) + '</div>' +
-    '<div class="chat-peer-sub"><span class="chat-exp-tag">' + esc(chatT('chat_experimental')) + '</span></div></div>';
+    '<div class="chat-peer-name">' + esc(chatT('chat_title')) + '</div></div>';
   if (chatAvailable()) html += chatTimerBtnHTML();
   if (chatAvailable()) {
     html += '<button id="chatRefreshBtn" class="chat-icon-btn' + (chatState.polling ? ' spinning' : '') + '" ' +
@@ -775,29 +773,38 @@ function chatRenderList(keepView) {
     }
   }
 
-  // My address card (always shown once identity is known).
+  // My address — slim single row: label + FULL address (wraps on narrow
+  // screens, never truncated) + eye + copy. The whole row copies; the eye
+  // masks the address against shoulder-surfing (persisted; copy keeps
+  // working while masked).
   if (info.address) {
-    // Compact: just the address + copy. Recovery moved into the ⋮ menu (with a
-    // red-dot breadcrumb when it hasn't been backed up yet).
-    html += '<div class="chat-card chat-myaddr">' +
-      '<div class="chat-myaddr-label">' + esc(chatT('chat_my_address')) + '</div>' +
-      '<div class="chat-myaddr-row"><code class="chat-addr">' + esc(info.address) + '</code>' +
-      '<button class="chat-btn-soft" onclick="chatCopy(\'' + escAttr(info.address) + '\')">' + esc(chatT('chat_copy')) + '</button></div>' +
+    var addrMasked = false;
+    try { addrMasked = localStorage.getItem('thefeed_chat_addr_mask') === '1'; } catch (e) { }
+    html += '<div class="chat-addr-row" onclick="chatCopy(\'' + escAttr(info.address) + '\')">' +
+      '<span class="chat-addr-label">' + esc(chatT('chat_my_address')) + '</span>' +
+      '<button type="button" class="chat-icon-btn chat-addr-info" title="' + escAttr(chatT('chat_addr_info_btn')) + '" aria-label="' + escAttr(chatT('chat_addr_info_btn')) +
+      '" onclick="event.stopPropagation();showInfoDialog(chatT(\'chat_addr_info\'))">' + icon('info') + '</button>' +
+      (addrMasked
+        ? '<span class="chat-addr-mask">••••</span>'
+        : '<code class="chat-addr" dir="ltr">' + esc(info.address) + '</code>') +
+      '<button type="button" class="chat-icon-btn chat-addr-eye" title="' + escAttr(chatT('chat_addr_mask')) + '" aria-label="' + escAttr(chatT('chat_addr_mask')) +
+      '" onclick="event.stopPropagation();chatToggleAddrMask()">' + icon(addrMasked ? 'eyeOff' : 'views') + '</button>' +
+      '<button type="button" class="chat-icon-btn chat-addr-copy" title="' + escAttr(chatT('chat_copy')) + '" aria-label="' + escAttr(chatT('chat_copy')) +
+      '" onclick="event.stopPropagation();chatCopy(\'' + escAttr(info.address) + '\')">' + icon('copy') + '</button>' +
       '</div>';
   }
 
   html += '<div id="chatRecoveryBox" style="display:none"></div>';
 
-  // Compose row whenever a server is turned on — using the disk-backed list too,
-  // so it shows on first open without waiting for the (slow) availability probe.
-  if (chatAvailable() || chatEnabledServers().length) {
-    html += '<div class="chat-card chat-add-row">' +
-      '<input id="chatAddAddr" placeholder="' + escAttr(chatT('chat_add_contact_ph')) + '" autocapitalize="off" autocomplete="off" spellcheck="false">' +
-      '<button class="chat-btn-primary" onclick="chatStartNew()">' + esc(chatT('chat_new_chat')) + '</button></div>';
-  }
-
+  var chatComposeReady = chatAvailable() || chatEnabledServers().length;
   if (!chatState.threads.length) {
     if (chatAvailable()) html += '<div class="chat-empty">' + esc(chatT('chat_no_threads')) + '</div>';
+    // First use: a visible labeled button — the FAB alone is not
+    // discoverable enough for an empty list.
+    if (chatComposeReady) {
+      html += '<div class="chat-empty-cta"><button type="button" class="chat-btn-primary" onclick="chatOpenNewChatSheet()">' +
+        icon('pencil') + ' ' + esc(chatT('chat_new_chat')) + '</button></div>';
+    }
   } else {
     html += '<div class="chat-threads">';
     chatState.threads.forEach(function (th) {
@@ -816,6 +823,13 @@ function chatRenderList(keepView) {
   }
   html += '<div class="chat-progress-wrap"><div class="chat-progress" id="chatPollProgress"><div class="chat-progress-fill" id="chatPollProgressFill"></div></div><span class="chat-progress-label" id="chatPollProgressLabel"></span></div>';
   html += '</div>';
+
+  // New chat: pencil FAB above the floating nav — replaces the old inline
+  // add-contact card (the thread list now starts right below the address row).
+  if (chatComposeReady) {
+    html += '<button type="button" class="chat-fab" onclick="chatOpenNewChatSheet()" aria-label="' +
+      escAttr(chatT('chat_new_chat')) + '" title="' + escAttr(chatT('chat_new_chat')) + '">' + icon('pencil') + '</button>';
+  }
 
   document.getElementById('chatSidebar').innerHTML = html;
   chatBindPullRefresh(document.getElementById('chatBody'));
@@ -876,7 +890,6 @@ async function chatForwardToSaved(btn) {
     if (r.ok) {
       var data = await r.json();
       var wasRemoved = data && data.toggled === 'removed';
-      if (wasRemoved) btn.classList.remove('saved'); else btn.classList.add('saved');
       if (typeof showToast === 'function') {
         showToast(wasRemoved ? (t('unsaved_toast') || 'Removed from Saved') : (t('saved_toast') || 'Forwarded to Saved'));
       }
@@ -1081,11 +1094,63 @@ async function chatRecheckServer(key) {
 }
 window.chatRecheckServer = chatRecheckServer;
 
+// chatToggleAddrMask flips the shoulder-surfing mask on the my-address row.
+function chatToggleAddrMask() {
+  try {
+    var k = 'thefeed_chat_addr_mask';
+    localStorage.setItem(k, localStorage.getItem(k) === '1' ? '0' : '1');
+  } catch (e) { }
+  chatRenderList();
+}
+
+// chatOpenNewChatSheet is the new-conversation bottom sheet (opened by the
+// pencil FAB): a large address field with a paste helper — easier than
+// long-press paste — and one primary start action. Uses .chat-sheet-overlay
+// so the render guard defers list re-renders while it's open.
+function chatOpenNewChatSheet() {
+  chatCloseMenu();
+  var ov = document.createElement('div');
+  ov.className = 'chat-sheet-overlay';
+  ov.id = 'chatSheet';
+  ov.onclick = function (e) { if (e.target === ov) chatCloseMenu(); };
+  ov.innerHTML = '<div class="chat-sheet" dir="' + chatDir() + '">' +
+    '<div class="chat-sheet-title">' + esc(chatT('chat_new_chat')) + '</div>' +
+    '<div class="chat-newchat-row">' +
+    '<input id="chatAddAddr" placeholder="' + escAttr(chatT('chat_add_contact_ph')) +
+    '" autocapitalize="off" autocomplete="off" spellcheck="false" onkeydown="if(event.key===\'Enter\')chatStartNew()">' +
+    '<button type="button" class="chat-btn-soft" onclick="chatPasteAddr()">' + esc(chatT('chat_paste')) + '</button></div>' +
+    '<button type="button" class="chat-btn-primary chat-newchat-start" onclick="chatStartNew()">' + esc(chatT('chat_start_chat')) + '</button>' +
+    '<button type="button" class="chat-sheet-item chat-sheet-cancel" onclick="chatCloseMenu()">' + esc(chatT('cancel')) + '</button>' +
+    '</div>';
+  document.getElementById('chatModal').appendChild(ov);
+  setTimeout(function () {
+    var i = document.getElementById('chatAddAddr');
+    if (i) try { i.focus(); } catch (e) { }
+  }, 60);
+}
+
+// chatPasteAddr fills the new-chat field from the clipboard; WebViews and
+// non-secure contexts may lack readText — then just focus so the user
+// pastes manually.
+function chatPasteAddr() {
+  var inp = document.getElementById('chatAddAddr');
+  if (!inp) return;
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    navigator.clipboard.readText().then(function (v) {
+      if (v) inp.value = v.trim();
+      inp.focus();
+    }, function () { inp.focus(); });
+    return;
+  }
+  inp.focus();
+}
+
 function chatStartNew() {
   var inp = document.getElementById('chatAddAddr');
   var addr = chatCanonAddr(inp.value);
   if (!addr) { showToast(chatT('chat_bad_address')); return }
-  if (addr === (chatState.info && chatState.info.address)) { showToast(chatT('chat_bad_address')); return }
+  // A valid address that's your own — say so, don't call it "invalid".
+  if (addr === (chatState.info && chatState.info.address)) { showToast(chatT('chat_self_address')); return }
   // Enabled servers, falling back to the disk-backed list so starting a chat
   // works on first open before the availability probe lands.
   var servers = chatEnabledServers();
@@ -1130,6 +1195,10 @@ async function openChatThread(addr) {
   // (server picker, the first-run "checking servers" spinner, a stray prompt) so
   // the render guard can't defer it and a full-screen overlay can't eat the tap.
   document.querySelectorAll('#chatModal .chat-sheet-overlay').forEach(function (o) { o.remove(); });
+  // The expanded recovery-code panel also trips chatOverlayOpen(), which would
+  // defer BOTH the list and thread render and leave a blank "select a
+  // conversation" pane. Collapse it too.
+  var _rec = document.getElementById('chatRecoveryBox'); if (_rec) _rec.style.display = 'none';
   chatState.guideAfterAvail = false; // don't re-pop the guide over the thread
   chatState.renderPending = false;
   chatState.view = 'thread';
@@ -1171,6 +1240,30 @@ async function chatThreadRefresh() {
 function chatToggleSafety(el) {
   chatState.safetyOpen = !chatState.safetyOpen;
   if (el) el.classList.toggle('open', chatState.safetyOpen);
+}
+
+// chatMsgMenu is the per-message action sheet (copy / save-to-Saved) —
+// opened by tapping a bubble or its ⋮. Reply joins this menu when the
+// reply feature lands.
+function chatMsgMenu(msgEl) {
+  if (!msgEl || !msgEl.classList || !msgEl.classList.contains('chat-msg')) return;
+  // Don't eat a click that ends a text selection.
+  try { if (window.getSelection && String(window.getSelection())) return; } catch (e) { }
+  chatCloseMenu();
+  var sheet = document.createElement('div');
+  sheet.className = 'chat-sheet-overlay';
+  sheet.id = 'chatSheet';
+  sheet.onclick = function (e) { if (e.target === sheet) chatCloseMenu(); };
+  sheet.innerHTML = '<div class="chat-sheet" dir="' + chatDir() + '">' +
+    '<button class="chat-sheet-item" id="chatMsgMenuCopy">' + icon('copy') + ' ' + esc(chatT('chat_copy')) + '</button>' +
+    '<button class="chat-sheet-item" id="chatMsgMenuSave">' + icon('bookmark') + ' ' + esc(t('forward_to_saved')) + '</button>' +
+    '<button class="chat-sheet-item chat-sheet-cancel" onclick="chatCloseMenu()">' + esc(chatT('cancel')) + '</button>' +
+    '</div>';
+  document.getElementById('chatModal').appendChild(sheet);
+  // closest('.chat-msg') matches the element itself, so the existing
+  // button-based helpers work unchanged with the bubble as the anchor.
+  sheet.querySelector('#chatMsgMenuCopy').onclick = function () { chatCloseMenu(); chatCopyMsg(msgEl); };
+  sheet.querySelector('#chatMsgMenuSave').onclick = function () { chatCloseMenu(); chatForwardToSaved(msgEl); };
 }
 
 // chatRowMenu shows an action sheet (pin/unpin + delete) for a list row.
@@ -1405,11 +1498,20 @@ async function chatRenderThread() {
   var keepScroll = prevBody && (prevBody.scrollHeight - prevBody.scrollTop - prevBody.clientHeight > 40);
   var prevScroll = prevBody ? prevBody.scrollTop : 0;
   var firstRender = prevInput == null;
-  var data = { msgs: [] };
+  var data = null;
   try {
     var r = await fetch('/api/chat/messages?peer=' + encodeURIComponent(addr) + '&markRead=1');
-    data = await r.json();
+    if (r.ok) data = await r.json();
   } catch (e) { }
+  // A failed/non-OK fetch (a transient local-server hiccup — e.g. right after a
+  // config switch or app resume) must NOT blank an already-open conversation:
+  // rendering an empty list here made the user's messages appear to vanish. Keep
+  // the current view and let the next tick retry; only the very first render has
+  // nothing to preserve and may fall through to the empty state.
+  if (data == null) {
+    if (!firstRender) return;
+    data = { msgs: [] };
+  }
   var msgs = data.msgs || []; // server may omit / null for an empty thread
   // Per-server ✓/✓✓ high-water seq (seq numbering is per server). Merge the
   // persisted thread counters (fresh: a just-committed send is bumped here)
@@ -1502,15 +1604,14 @@ async function chatRenderThread() {
       // probes them too — otherwise ✓✓ never lands after switching servers.
       if (sk && del < m.seq) pending[sk] = true;
     }
-    html += '<div class="chat-msg ' + (m.dir === 'in' ? 'in' : 'out') + '" dir="auto">' +
+    // Bubble actions live in a sheet (chatMsgMenu) — opened by tapping the
+    // bubble or the ⋮ pinned at the block's bottom edge, outside the box.
+    html += '<div class="chat-msg ' + (m.dir === 'in' ? 'in' : 'out') + '" dir="auto" onclick="chatMsgMenu(this)">' +
       '<span class="chat-msg-text">' + esc(m.text).replace(/🇮🇷/g, '<img src="/static/lion-sun.svg" alt="\u{1F981}☀️" style="height:1.1em;vertical-align:middle">') + '</span>' +
       '<span class="chat-msg-meta">' +
-      '<button type="button" class="chat-msg-copy"' +
-      ' onclick="event.stopPropagation();chatCopyMsg(this)">' + esc(chatT('chat_copy')) + '</button>' +
-      '<button type="button" class="chat-msg-save" title="' + escAttr(t('forward_to_saved')) +
-      '" aria-label="' + escAttr(t('forward_to_saved')) +
-      '" onclick="event.stopPropagation();chatForwardToSaved(this)">' + icon('bookmark') + '</button>' +
-      '<span class="chat-msg-time">' + chatFmtTime(m.ts) + ticks + '</span></span></div>' +
+      '<span class="chat-msg-time">' + chatFmtTime(m.ts) + ticks + '</span></span>' +
+      '<button type="button" class="chat-msg-more" title="" aria-label="' + escAttr(chatT('chat_msg_actions')) +
+      '" onclick="event.stopPropagation();chatMsgMenu(this.parentNode)">' + icon('more') + '</button></div>' +
       '<div class="chat-clearfix"></div>';
   });
   chatState.pendingServers[addr] = Object.keys(pending);

@@ -40,7 +40,7 @@
 
 <section id="en">
   <h1>TheFeed — Privacy Policy</h1>
-  <p class="updated">Last updated: 2026-06-10</p>
+  <p class="updated">Last updated: 2026-07-10</p>
 
   <h2>Summary</h2>
   <p>
@@ -74,18 +74,18 @@
 
   <h2>Messenger (optional)</h2>
   <p>
-    Some servers offer an optional messenger. It is end-to-end encrypted: only
-    you and the person you are talking to can read a message. The server you
-    connect to — which is run by whoever operates that server, not by the app
-    developers — only ever holds an <strong>unreadable, encrypted blob</strong>
+    The app includes an optional messenger. It is end-to-end encrypted: only
+    you and the person you are talking to can read a message. The server that
+    relays it — including the default server we operate, and any other server you
+    choose to use — only ever holds an <strong>unreadable, encrypted blob</strong>
     until the recipient picks it up, and at most for a few days before it is
     automatically deleted.
   </p>
   <ul>
-    <li>The developers run no messenger server and can never see your messages, contacts, or who you talk to.</li>
-    <li>To route a message, the server you chose necessarily sees <strong>which address sends to which address</strong> (the message contents stay encrypted to you). Its operator can therefore see this routing metadata; the message text and your contact names are never exposed to them.</li>
-    <li>Your messenger identity is generated on your device from a recovery code that also stays on your device. Your "address" is derived from it and is the only thing you share to be reachable.</li>
-    <li>The messenger is off unless you open it, and only works against servers whose owner has enabled it.</li>
+    <li>Neither we nor any server operator can read your messages or your contact names: the message contents are end-to-end encrypted, and contact names never leave your device.</li>
+    <li>To route a message, the relaying server (including our default server) necessarily sees <strong>which address sends to which address</strong> and the delivery timing. It never sees the message text or your contact names.</li>
+    <li>Your messenger identity is generated on your device from a recovery code that also stays on your device. Your "address" is a pseudonym derived from it — not linked to your name, phone, or email — and is the only thing you share to be reachable.</li>
+    <li>The messenger is off unless you open it, and you can point the app at a different server at any time.</li>
   </ul>
 
   <h2>Network connections</h2>
@@ -105,9 +105,12 @@
 
   <h2>Permissions</h2>
   <ul>
-    <li><strong>Photos (write only)</strong> — requested only when you choose to save a downloaded image or video to your camera roll.</li>
+    <li><strong>Notifications</strong> — to alert you to new posts and messages.</li>
+    <li><strong>Saving downloads</strong> — only when you choose to save a downloaded image or video, the app writes it to your device's gallery or storage.</li>
+    <li><strong>Foreground service (Android)</strong> — keeps the app fetching and delivering while you are using it.</li>
     <li><strong>Local network</strong> — the app talks only to its own embedded server on <code>127.0.0.1</code>, which does not require system permission. The app does not scan your local network.</li>
   </ul>
+  <p>The app does <strong>not</strong> access your camera, microphone, contacts, location, SMS, or call logs.</p>
 
   <h2>Children's privacy</h2>
   <p>
@@ -130,7 +133,7 @@
 
 <section id="fa" hidden dir="rtl">
   <h1>TheFeed — حریم خصوصی</h1>
-  <p class="updated">آخرین به‌روزرسانی: ۲۰۲۶/۰۶/۱۰</p>
+  <p class="updated">آخرین به‌روزرسانی: ۲۰۲۶/۰۷/۱۰</p>
 
   <h2>خلاصه</h2>
   <p>
@@ -161,17 +164,17 @@
 
   <h2>پیام‌رسان (اختیاری)</h2>
   <p>
-    برخی سرورها یک پیام‌رسان اختیاری ارائه می‌دهند. این پیام‌رسان رمزنگاری
-    سرتاسری دارد: فقط شما و طرف مقابل می‌توانید پیام را بخوانید. سروری که به آن
-    وصل می‌شوید — که توسط گرداننده‌ی همان سرور اداره می‌شود، نه سازنده‌ی برنامه —
+    برنامه یک پیام‌رسان اختیاری دارد. این پیام‌رسان رمزنگاری سرتاسری دارد: فقط
+    شما و طرف مقابل می‌توانید پیام را بخوانید. سروری که پیام را منتقل می‌کند —
+    از جمله سرور پیش‌فرضی که ما اداره می‌کنیم و هر سرور دیگری که خودتان انتخاب کنید —
     فقط یک <strong>بسته‌ی رمزشده و غیرقابل‌خواندن</strong> را تا زمانی که گیرنده
     آن را دریافت کند نگه می‌دارد و حداکثر چند روز، سپس به‌صورت خودکار پاک می‌شود.
   </p>
   <ul>
-    <li>سازنده‌ی برنامه هیچ سرور پیام‌رسانی ندارد و هرگز به پیام‌ها، مخاطبان یا طرف گفتگوی شما دسترسی ندارد.</li>
-    <li>برای مسیریابی پیام، سرور انتخابی شما ناگزیر می‌بیند که <strong>کدام آدرس به کدام آدرس</strong> پیام می‌فرستد (متن پیام برای شما رمزشده باقی می‌ماند). بنابراین گرداننده‌ی سرور می‌تواند این فراداده‌ی مسیریابی را ببیند؛ ولی متن پیام و نام مخاطبان هرگز در اختیار او قرار نمی‌گیرد.</li>
-    <li>هویت پیام‌رسان شما روی دستگاهتان از یک کد بازیابی ساخته می‌شود که آن هم روی دستگاه می‌ماند. «آدرس» شما از همان مشتق می‌شود و تنها چیزی است که برای در دسترس بودن به اشتراک می‌گذارید.</li>
-    <li>پیام‌رسان تا وقتی آن را باز نکنید خاموش است و فقط روی سرورهایی کار می‌کند که گرداننده‌اش آن را فعال کرده باشد.</li>
+    <li>نه ما و نه هیچ گرداننده‌ی سروری نمی‌تواند پیام‌ها یا نام مخاطبان شما را بخواند: متن پیام‌ها رمزنگاری سرتاسری است و نام مخاطبان هرگز از دستگاه شما خارج نمی‌شود.</li>
+    <li>برای مسیریابی پیام، سرور منتقل‌کننده (از جمله سرور پیش‌فرض ما) ناگزیر می‌بیند که <strong>کدام آدرس به کدام آدرس</strong> پیام می‌فرستد و زمان تحویل را می‌داند. اما هرگز متن پیام یا نام مخاطبان شما را نمی‌بیند.</li>
+    <li>هویت پیام‌رسان شما روی دستگاهتان از یک کد بازیابی ساخته می‌شود که آن هم روی دستگاه می‌ماند. «آدرس» شما یک نام مستعار مشتق‌شده از آن است — به نام، شماره تلفن یا ایمیل شما وصل نیست — و تنها چیزی است که برای در دسترس بودن به اشتراک می‌گذارید.</li>
+    <li>پیام‌رسان تا وقتی آن را باز نکنید خاموش است و هر زمان می‌توانید برنامه را به سرور دیگری وصل کنید.</li>
   </ul>
 
   <h2>اتصال به شبکه</h2>
@@ -188,9 +191,12 @@
 
   <h2>مجوزها</h2>
   <ul>
-    <li><strong>تصاویر (فقط نوشتن)</strong> — فقط زمانی که خودتان تصمیم به ذخیره‌ی عکس یا ویدیو در گالری بگیرید.</li>
-    <li><strong>شبکه‌ی محلی</strong> — برنامه فقط با سرور داخلی روی <code>127.0.0.1</code> کار می‌کند که به مجوز سیستمی نیاز ندارد.</li>
+    <li><strong>اعلان‌ها</strong> — برای اطلاع‌رسانی پست‌ها و پیام‌های جدید.</li>
+    <li><strong>ذخیره‌ی دانلودها</strong> — فقط وقتی خودتان تصمیم به ذخیره‌ی عکس یا ویدیوی دانلودشده بگیرید، برنامه آن را در گالری یا حافظه‌ی دستگاه می‌نویسد.</li>
+    <li><strong>سرویس پیش‌زمینه (اندروید)</strong> — تا وقتی از برنامه استفاده می‌کنید، دریافت و تحویل پیام‌ها را ادامه می‌دهد.</li>
+    <li><strong>شبکه‌ی محلی</strong> — برنامه فقط با سرور داخلی روی <code>127.0.0.1</code> کار می‌کند که به مجوز سیستمی نیاز ندارد و شبکه‌ی محلی شما را اسکن نمی‌کند.</li>
   </ul>
+  <p>برنامه به دوربین، میکروفون، مخاطبان، موقعیت مکانی، پیامک یا گزارش تماس‌های شما دسترسی <strong>ندارد</strong>.</p>
 
   <h2>کودکان</h2>
   <p>این برنامه برای کودکان زیر ۱۳ سال طراحی نشده.</p>

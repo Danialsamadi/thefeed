@@ -822,12 +822,7 @@ async function jumpToSavedOriginal(channelId, messageId) {
   // navigating, otherwise the saved-view flex layout leaks into the channel.
   closeSavedMessages();
 
-  await selectChannel(chNum);
-  // Wait for messages to render, then scroll
-  setTimeout(function () {
-    var found = scrollToMsg(messageId);
-    if (!found) showToast(t('msg_not_in_cache') || 'Message no longer in cache');
-  }, 500);
+  gotoChannelPost(chNum, messageId);
 }
 
 // jumpToTelemirrorPost reopens the Telemirror browser at the saved post's

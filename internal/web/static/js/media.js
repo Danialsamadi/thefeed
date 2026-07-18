@@ -788,6 +788,11 @@ window.handleAndroidBack = async function () {
   var chatSheet = document.querySelector('.chat-sheet-overlay');
   if (chatSheet && chatSheet.parentNode) { chatSheet.parentNode.removeChild(chatSheet); return; }
 
+  // Link sheets (feed + mirror "open this link?"). Own overlay classes, not
+  // .modal-overlay, so they need their own back-button hook.
+  var linkSheet = document.getElementById('linkSheetOverlay') || document.getElementById('tmLinkSheet');
+  if (linkSheet && linkSheet.parentNode) { linkSheet.parentNode.removeChild(linkSheet); return; }
+
   // Any open modal dialog (profiles, link sheet, info dialog, close-confirm…).
   var openModal = document.querySelector('.modal-overlay.active');
   if (openModal) { openModal.classList.remove('active'); return; }
@@ -1506,6 +1511,18 @@ function renderMessages(msgs, gaps) {
       // their position so an in-place re-render doesn't yank them to
       // the top (innerHTML resets scrollTop to 0 by default).
       el.scrollTop = prevScrollTop;
+    }
+  }
+  // A jump-to-post highlight may have just been wiped by this re-render
+  // (the refresh that selectChannel starts lands seconds after the jump).
+  // While the highlight window is open, re-anchor on the post and restart
+  // its ring on the fresh element. Doesn't extend the window, so repeated
+  // refreshes can't pin the view forever.
+  if (_msgHighlight && _msgHighlight.ch === selectedChannel && Date.now() < _msgHighlight.until) {
+    var hlEl = findMsgEl(_msgHighlight.id);
+    if (hlEl) {
+      hlEl.scrollIntoView({ block: 'center' });
+      highlightMsgEl(hlEl);
     }
   }
 }
