@@ -11,6 +11,20 @@ permissions:
   contents: read
 
 jobs:
+  # Tests that skip unless root, such as giving a rewritten file back to
+  # the server container's user.
+  as-root:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Go tests as root
+        run: sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -count=1 -run 'Owner' -v ./internal/serverconfig/
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
