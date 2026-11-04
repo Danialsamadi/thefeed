@@ -7,8 +7,13 @@
 // Hooks other pages may supply; without them the parts that need them don't show:
 //   Panel.feature(id)  the Board's last view of a feature ('x'): {status, line}.
 //                      X down shows the "X is down" callout on X accounts.
+//                      status is the API's state (ok, slow, down, off), or the
+//                      server's ('stopped', 'not answering') while it isn't
+//                      running. 'chan' adds last and next, the newest cycle's
+//                      start and the next one's, once the Board has read them.
 //   Panel.check(id)    run a feature's check now, a promise of the line to show.
 //                      'chan' is Fetch all now on Telegram channels.
+//   Both are pages/board.js's.
 // Restart… in the notice opens Service and power (pages/service.js) in its
 // restart confirm, through its own Panel.acts.svc.
 'use strict';
@@ -54,15 +59,9 @@ const Ctl = (() => {
     load();
   }, 1000);
 
-  // Changing a field and then clicking a button blurs the field first. A
-  // redraw between press and release would replace the button and lose the
-  // click, so redraws wait for the release; the click lands, then this draws.
-  let down = false, held = false;
-  root.addEventListener('pointerdown', () => { down = true; });
-  const release = () => { down = false; if (held) { held = false; setTimeout(Panel.render); } };
-  addEventListener('pointerup', release);
-  addEventListener('pointercancel', release);
-  const render = () => { if (down) held = true; else Panel.render(); };
+  // Panel.render waits while a pointer is down, so changing a field and then
+  // clicking a button still lands the click.
+  const render = () => Panel.render();
 
   const focus = k => { const el = root.querySelector(`.v-control [data-k="${CSS.escape(k)}"]`); el?.focus(); return el; };
   const error = r => fieldErrors(r.data, [])[''];

@@ -1,6 +1,6 @@
 # 09 Board, feature status pages and Server UI
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 05, 06, 07, 08
 Spec: `.scratch/admin-panel/spec.md`, user stories 16 to 44
 Design: `.scratch/admin-panel/mockup.html`, the Board status list, feature status page and Server page
