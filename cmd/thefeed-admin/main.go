@@ -17,11 +17,14 @@ import (
 	"syscall"
 
 	"github.com/sartoopjj/thefeed/internal/admin"
+	"github.com/sartoopjj/thefeed/internal/admin/logs"
 	"github.com/sartoopjj/thefeed/internal/version"
 )
 
 // modules is the app wiring: each feature module is one line here.
-var modules = []admin.Module{}
+var modules = []admin.Module{
+	logs.Module,
+}
 
 func main() {
 	cmd, args := "serve", os.Args[1:]
