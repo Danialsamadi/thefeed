@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,9 +49,10 @@ func TestInstallScriptChatDefaultsMatchServer(t *testing.T) {
 }
 
 // installSh sources scripts/install.sh in bash and runs script after it, with
-// every path the installer writes inside a temp dir ($T), and systemctl and
-// ufw (reporting active) replaced by functions that record their arguments in
-// $T/systemctl.log and $T/ufw.log. stdin answers the prompts. The installer
+// every path the installer writes inside a temp dir ($T), and systemctl, ufw
+// (reporting active) and docker replaced by functions that record their
+// arguments in $T/systemctl.log, $T/ufw.log and $T/docker.log. stdin answers
+// the prompts. The installer
 // sees none of the caller's THEFEED_*, TELEGRAM_*, SOURCE or GITHUB_REPO,
 // only env (KEY=value). It returns $T.
 func installSh(t *testing.T, stdin, script string, env ...string) string {
@@ -71,6 +73,7 @@ SERVICE_FILE="$T/thefeed-server.service"; ADMIN_SERVICE_FILE="$T/thefeed-admin.s
 mkdir -p "$DATA_DIR"
 systemctl() { echo "$*" >> "$T/systemctl.log"; }
 ufw() { echo "$*" >> "$T/ufw.log"; [[ "$1" == status ]] && echo "Status: active"; return 0; }
+docker() { echo "$*" >> "$T/docker.log"; }
 `
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -312,6 +315,53 @@ func TestInstallSavesPanelHostnameAndReleaseRepo(t *testing.T) {
 	}
 }
 
+// The installer asks whether to run the panel in Docker: Yes, unless the
+// saved answer is No. Pressing Enter keeps it.
+func TestInstallAsksToRunThePanelInDocker(t *testing.T) {
+	for saved, want := range map[string]string{"": "1", "THEFEED_ADMIN_DOCKER=0\n": "0", "THEFEED_ADMIN_DOCKER=1\n": "1"} {
+		dir := installSh(t, strings.Repeat("\n", 40), `cat > "$DATA_DIR/thefeed.env" <<'E'
+THEFEED_DOMAIN=t.example.com
+THEFEED_KEY=secret
+TELEGRAM_API_ID=0
+THEFEED_NO_TELEGRAM=1
+`+saved+`E
+setup_config`)
+		env := envFile(t, filepath.Join(dir, "opt", "data", "thefeed.env"))
+		if got := one(t, env, "THEFEED_ADMIN_DOCKER"); got != want {
+			t.Errorf("saved %q: THEFEED_ADMIN_DOCKER = %q after Enter, want %q", saved, got, want)
+		}
+	}
+}
+
+// Docker comes from the OS packages. Where there's none, the installer says
+// what to do and fails, and the panel stays a systemd service.
+func TestInstallDockerFromOSPackages(t *testing.T) {
+	for release, want := range map[string]string{
+		"ubuntu": "apt-get install -y -q docker.io",
+		"debian": "apt-get install -y -q docker.io",
+		"fedora": "dnf install -y -q moby-engine",
+		"amzn":   "dnf install -y -q docker",
+		"arch":   "",
+	} {
+		dir := installSh(t, "", `release=`+release+`
+apt-get() { echo "apt-get $*" >> "$T/pkg.log"; }
+dnf() { echo "dnf $*" >> "$T/pkg.log"; }
+yum() { echo "yum $*" >> "$T/pkg.log"; }
+install_docker > "$T/out" 2>&1; echo $? > "$T/rc"`)
+		pkgs, _ := os.ReadFile(filepath.Join(dir, "pkg.log"))
+		rc := strings.TrimSpace(readFile(t, filepath.Join(dir, "rc")))
+		if want == "" {
+			if rc == "0" || len(pkgs) > 0 || !strings.Contains(readFile(t, filepath.Join(dir, "out")), "docs.docker.com/engine/install") {
+				t.Errorf("%s: exit %s, ran %q; want a failure saying where to get Docker", release, rc, pkgs)
+			}
+			continue
+		}
+		if rc != "0" || !strings.Contains(string(pkgs), want+"\n") {
+			t.Errorf("%s: exit %s, ran:\n%s\nwant %q", release, rc, pkgs, want)
+		}
+	}
+}
+
 // The update command the installer prints has no GITHUB_REPO in it, so a
 // later run without one stays on the recorded repo: it neither installs
 // upstream's binaries over a fork's nor moves the panel's update source.
@@ -339,8 +389,8 @@ download_binary v9.9.9 thefeed-admin`)
 // With the unit no longer passing --no-telegram, thefeed.env alone decides
 // the mode: choosing Telegram on an update must turn the old switch off.
 func TestInstallUpdateToTelegramModeTurnsNoTelegramOff(t *testing.T) {
-	// Enter through the panel hostname, then mode 2 and its credentials.
-	answers := strings.Repeat("\n", 14) + "2\n12345\nabc\n+15550100\n" + strings.Repeat("\n", 10)
+	// Enter through the panel questions, then mode 2 and its credentials.
+	answers := strings.Repeat("\n", 15) + "2\n12345\nabc\n+15550100\n" + strings.Repeat("\n", 10)
 	dir := installSh(t, answers, `cat > "$DATA_DIR/thefeed.env" <<'E'
 THEFEED_DOMAIN=t.example.com
 THEFEED_KEY=secret
@@ -384,13 +434,18 @@ func TestInstallWritesPanelUnit(t *testing.T) {
 	}
 }
 
-// --uninstall takes the panel away with the server. Piped (no terminal), it
-// keeps the data, the panel's database included.
+// --uninstall takes the panel away with the server, its container and image
+// too. Piped (no terminal), it keeps the data, the panel's database included.
 func TestInstallUninstallRemovesPanel(t *testing.T) {
 	dir := installSh(t, "", `mkdir -p "$INSTALL_DIR/admin"
 touch "$INSTALL_DIR/thefeed-server" "$INSTALL_DIR/thefeed-admin" "$SERVICE_FILE" "$ADMIN_SERVICE_FILE" \
     "$DATA_DIR/thefeed.env" "$INSTALL_DIR/admin/admin.db"
+docker() { echo "$*" >> "$T/docker.log"; [[ "$1" == inspect ]] && echo ghcr.io/fork/thefeed-admin:v1.2.3; return 0; }
 uninstall_thefeed`)
+	docker := readFile(t, filepath.Join(dir, "docker.log"))
+	if rm := strings.Index(docker, "rm -f thefeed-admin\n"); rm < 0 || strings.Index(docker, "rmi ghcr.io/fork/thefeed-admin:v1.2.3\n") < rm {
+		t.Errorf("docker ran:\n%s\nwant the container removed, then its image", docker)
+	}
 	for _, gone := range []string{"thefeed-admin.service", "opt/thefeed-admin", "thefeed-server.service", "opt/thefeed-server"} {
 		if _, err := os.Stat(filepath.Join(dir, gone)); !os.IsNotExist(err) {
 			t.Errorf("%s still there after --uninstall", gone)
@@ -468,9 +523,10 @@ download_binary v9.9.9 thefeed-admin`)
 // --local installs the binaries a build left in a directory instead of
 // downloading a release, versioned as the binary says. The end-to-end suite
 // installs this way over e2e/testdata/thefeed.env with no answers on stdin:
-// every prompt keeps its value, and the panel's settings carry over.
+// every prompt keeps its value, and the panel's settings carry over. Saved
+// No to Docker, the panel is the unit, with no container left beside it.
 func TestInstallFromLocalBinaries(t *testing.T) {
-	seed := readFile(t, "../../e2e/testdata/thefeed.env") + "THEFEED_ADMIN_RELEASE_BASE_URL=http://127.0.0.1:1\n"
+	seed := readFile(t, "../../e2e/testdata/thefeed.env") + "THEFEED_ADMIN_RELEASE_BASE_URL=http://127.0.0.1:1\nTHEFEED_ADMIN_DOCKER=0\n"
 	dir := installSh(t, "", `cat > "$DATA_DIR/thefeed.env" <<'E'
 `+seed+`E
 LOCAL_DIR="$T/build"; mkdir -p "$LOCAL_DIR"
@@ -514,6 +570,88 @@ install_thefeed "" > "$T/out" 2>&1`)
 		if !strings.Contains(log, cmd+"\n") {
 			t.Errorf("systemctl %s was not run; got:\n%s", cmd, log)
 		}
+	}
+	if got := readFile(t, filepath.Join(dir, "docker.log")); got != "rm -f thefeed-admin\n" {
+		t.Errorf("docker ran:\n%s\nwant only rm -f thefeed-admin", got)
+	}
+}
+
+// Yes runs the panel as the thefeed-admin container in place of its unit.
+// --local loads the image from the build directory, and the URL and
+// fingerprint come from the container's log.
+func TestInstallRunsThePanelInDocker(t *testing.T) {
+	seed := readFile(t, "../../e2e/testdata/thefeed.env") + "THEFEED_ADMIN_DOCKER=1\n"
+	dir := installSh(t, "", `cat > "$DATA_DIR/thefeed.env" <<'E'
+`+seed+`E
+touch "$ADMIN_SERVICE_FILE"
+LOCAL_DIR="$T/build"; mkdir -p "$LOCAL_DIR"
+for n in thefeed-server thefeed-admin; do
+    printf '#!/bin/sh\necho "%s v0.98.0 (commit: e2e, built: now)"\n' "$n" > "$LOCAL_DIR/$n-linux-$(arch)"
+    chmod 755 "$LOCAL_DIR/$n-linux-$(arch)"
+done
+docker() {
+    echo "$*" >> "$T/docker.log"
+    case "$1" in
+        load) echo "Loaded image: thefeed-admin:e2e" ;;
+        logs) echo "admin: serving HTTPS on :443 with a self-signed certificate, SHA-256 fingerprint AA:BB" >&2 ;;
+    esac
+}
+curl() { echo "$*" >> "$T/curl.log"; return 1; }
+reopen_tty() { :; }
+install_thefeed "" > "$T/out" 2>&1`)
+	out := readFile(t, filepath.Join(dir, "out"))
+	tar := filepath.Join(dir, "build", "thefeed-admin-image-linux-"+runtime.GOARCH+".tar")
+	run := "run -d --name thefeed-admin --restart unless-stopped --privileged --pid host --network host" +
+		" -v /var/run/docker.sock:/var/run/docker.sock -v " + filepath.Join(dir, "opt") + ":" + filepath.Join(dir, "opt") +
+		" -v /etc/systemd/system:/etc/systemd/system -e THEFEED_ADMIN_SERVER=systemd thefeed-admin:e2e\n"
+	log := readFile(t, filepath.Join(dir, "docker.log"))
+	load := strings.Index(log, "load -i "+tar+"\n")
+	rm := strings.Index(log, "rm -f thefeed-admin\n")
+	if load < 0 || rm < load || strings.Index(log, run) < rm || strings.Contains(log, "pull") {
+		t.Errorf("docker ran:\n%s\nwant load -i %s, rm -f thefeed-admin, then\n%s", log, tar, run)
+	}
+	if !strings.Contains(out, tar) {
+		t.Errorf("didn't say it loads %s:\n%s", tar, out)
+	}
+	sys := readFile(t, filepath.Join(dir, "systemctl.log"))
+	for _, cmd := range []string{"enable --now docker", "disable --now thefeed-admin"} {
+		if !strings.Contains(sys, cmd+"\n") {
+			t.Errorf("systemctl %s was not run; got:\n%s", cmd, sys)
+		}
+	}
+	if strings.Contains(sys, "restart thefeed-admin") {
+		t.Errorf("the panel unit was started too:\n%s", sys)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "thefeed-admin.service")); !os.IsNotExist(err) {
+		t.Error("the panel's unit is still there beside its container")
+	}
+	if !strings.Contains(readFile(t, filepath.Join(dir, "ufw.log")), "allow 443/tcp\n") {
+		t.Error("an active ufw was not opened for 443/tcp")
+	}
+	for _, want := range []string{"AA:BB", "docker stop thefeed-admin"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("panel details lack %q:\n%s", want, out)
+		}
+	}
+}
+
+// Without --local the image is the release's, under the repo owner's name,
+// lowercased as image names must be. A failed pull leaves the unit alone.
+func TestInstallPullsThePanelImage(t *testing.T) {
+	dir := installSh(t, "", `GITHUB_REPO=Fork/thefeed run_admin_container v1.2.3`)
+	log := readFile(t, filepath.Join(dir, "docker.log"))
+	if !strings.Contains(log, "pull ghcr.io/fork/thefeed-admin:v1.2.3\n") || !strings.Contains(log, "THEFEED_ADMIN_SERVER=systemd ghcr.io/fork/thefeed-admin:v1.2.3\n") {
+		t.Errorf("docker ran:\n%s\nwant ghcr.io/fork/thefeed-admin:v1.2.3 pulled and run", log)
+	}
+
+	dir = installSh(t, "", `touch "$ADMIN_SERVICE_FILE"
+docker() { echo "$*" >> "$T/docker.log"; [[ "$1" != pull ]]; }
+run_admin_container v1.2.3 || echo fell back > "$T/rc"`)
+	if log := readFile(t, filepath.Join(dir, "docker.log")); strings.Contains(log, "run ") || readFile(t, filepath.Join(dir, "rc")) != "fell back\n" {
+		t.Errorf("after a failed pull docker ran:\n%s", log)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "thefeed-admin.service")); err != nil {
+		t.Errorf("a failed pull removed the panel's unit: %v", err)
 	}
 }
 
