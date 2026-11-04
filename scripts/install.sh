@@ -6,7 +6,9 @@ blue='\033[0;34m'
 yellow='\033[0;33m'
 plain='\033[0m'
 
-GITHUB_REPO="sartoopjj/thefeed"
+# A fork installs its own releases with: curl ... | sudo GITHUB_REPO=owner/repo bash
+# The repo is saved as THEFEED_ADMIN_RELEASE_REPO, the panel's update source.
+GITHUB_REPO="${GITHUB_REPO:-sartoopjj/thefeed}"
 INSTALL_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/install.sh"
 GITLAB_REPO="sartoopjj/thefeed"
 # URL-encoded GitLab project path for /api/v4/projects/:id calls.
@@ -19,22 +21,7 @@ SOURCE="${SOURCE:-auto}"
 INSTALL_DIR="/opt/thefeed"
 DATA_DIR="${INSTALL_DIR}/data"
 SERVICE_FILE="/etc/systemd/system/thefeed-server.service"
-
-# check root
-[[ $EUID -ne 0 ]] && echo -e "${red}Fatal error:${plain} Please run this script with root privilege" && exit 1
-
-# Check OS and set release variable
-if [[ -f /etc/os-release ]]; then
-    source /etc/os-release
-    release=$ID
-elif [[ -f /usr/lib/os-release ]]; then
-    source /usr/lib/os-release
-    release=$ID
-else
-    echo -e "${red}Failed to check the system OS, please contact the author!${plain}" >&2
-    exit 1
-fi
-echo -e "OS: ${green}$release${plain}"
+ADMIN_SERVICE_FILE="/etc/systemd/system/thefeed-admin.service"
 
 arch() {
     case "$(uname -m)" in
@@ -43,8 +30,6 @@ arch() {
         *) echo -e "${red}Unsupported CPU architecture: $(uname -m)${plain}" && exit 1 ;;
     esac
 }
-
-echo -e "Arch: ${green}$(arch)${plain}"
 
 install_base() {
     echo -e "${green}Installing base dependencies...${plain}"
@@ -181,12 +166,15 @@ list_versions() {
     echo -e "Install one with: ${blue}curl -Ls ${INSTALL_URL} | sudo bash -s -- --version <tag>${plain}"
 }
 
+# Downloads release asset $2-linux-<arch> (default thefeed-server) of version
+# $1 to ${INSTALL_DIR}/$2. It goes through a temporary file and a rename, so a
+# running binary is never written over. Returns 1 when the download fails.
 download_binary() {
     resolve_source
-    local version="$1"
+    local version="$1" name="${2:-thefeed-server}"
     local arch_name
     arch_name=$(arch)
-    local binary_name="thefeed-server-linux-${arch_name}"
+    local binary_name="${name}-linux-${arch_name}"
     local url
     if [[ "$SOURCE" == "gitlab" ]]; then
         # GitLab Release direct-asset URL — same path the CI registers via
@@ -196,19 +184,20 @@ download_binary() {
         url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${binary_name}"
     fi
 
-    echo -e "${green}Downloading thefeed-server ${version} for linux/${arch_name} from ${SOURCE}...${plain}"
+    echo -e "${green}Downloading ${name} ${version} for linux/${arch_name} from ${SOURCE}...${plain}"
     mkdir -p "$INSTALL_DIR"
 
-    curl -4fLo "${INSTALL_DIR}/thefeed-server" "$url"
-    if [[ $? -ne 0 ]]; then
+    if ! curl -4fLo "${INSTALL_DIR}/${name}.new" "$url"; then
+        rm -f "${INSTALL_DIR}/${name}.new"
         echo -e "${red}Failed to download binary from:${plain}"
         echo -e "${red}  ${url}${plain}"
         echo -e "${yellow}Please check that the version exists and your server can reach the ${SOURCE} mirror${plain}"
-        exit 1
+        return 1
     fi
 
-    chmod 755 "${INSTALL_DIR}/thefeed-server"
-    echo -e "${green}Binary installed to ${INSTALL_DIR}/thefeed-server${plain}"
+    chmod 755 "${INSTALL_DIR}/${name}.new"
+    mv -f "${INSTALL_DIR}/${name}.new" "${INSTALL_DIR}/${name}"
+    echo -e "${green}Binary installed to ${INSTALL_DIR}/${name}${plain}"
 }
 
 setup_channels() {
@@ -287,13 +276,16 @@ setup_private_channels() {
     fi
 }
 
-# Helper: update or add a key=value in the env file
+# Helper: update or add a key=value in the env file. The value never becomes
+# part of a sed or awk program, so a path or token with | & or \ is safe.
 env_set() {
-    local key="$1" val="$2"
-    if grep -q "^${key}=" "$DATA_DIR/thefeed.env" 2>/dev/null; then
-        sed -i "s|^${key}=.*|${key}=${val}|" "$DATA_DIR/thefeed.env"
+    local key="$1" val="$2" f="$DATA_DIR/thefeed.env"
+    if grep -q "^${key}=" "$f" 2>/dev/null; then
+        (umask 077; K="$key" V="$val" awk 'index($0, ENVIRON["K"] "=") == 1 { $0 = ENVIRON["K"] "=" ENVIRON["V"] } 1' "$f" > "$f.tmp") &&
+            cat "$f.tmp" > "$f"
+        rm -f "$f.tmp"
     else
-        echo "${key}=${val}" >> "$DATA_DIR/thefeed.env"
+        printf '%s=%s\n' "$key" "$val" >> "$f"
     fi
 }
 
@@ -301,6 +293,68 @@ env_set() {
 env_get() {
     local key="$1"
     grep "^${key}=" "$DATA_DIR/thefeed.env" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+# Helper: whether a setting is on, read the way the server reads it: 1, true,
+# yes or on, in any case. The panel writes true/false, the installer 1/0.
+is_true() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        1 | true | yes | on) return 0 ;;
+    esac
+    return 1
+}
+
+# Moves the settings an old thefeed-server unit passed as flags into
+# thefeed.env, so the new unit can pass only --data-dir. Keeps the value the
+# server ran with: a typed flag beat the file, except where cmd/server/main.go
+# lets the file win. A ${VAR} flag already came from the file. The old unit
+# is kept as thefeed-server.service.bak in the data directory.
+migrate_unit_flags() {
+    [[ -f "$SERVICE_FILE" ]] || return 0
+    local words word flag val e entry env def cur moved="" unknown="" other=false
+    words=$(awk '/^ExecStart=/ { on = 1 } on { more = sub(/\\$/, ""); printf "%s ", $0; if (!more) exit }' "$SERVICE_FILE")
+    set -f
+    set -- ${words#ExecStart=}
+    set +f
+    shift # the binary
+    mkdir -p "$DATA_DIR"
+    while [[ $# -gt 0 ]]; do
+        word="$1"; shift
+        [[ "$word" == -* ]] || continue
+        flag="${word#-}"; flag="${flag#-}"; val=""
+        if [[ "$flag" == *=* ]]; then val="${flag#*=}"; flag="${flag%%=*}"; fi
+        [[ "$flag" == data-dir ]] || other=true
+        entry=""
+        for e in "${SERVER_SETTINGS[@]}"; do
+            [[ "$e" == *"|${flag}|"* ]] && { entry="$e"; break; }
+        done
+        if [[ -z "$entry" ]]; then unknown="${unknown} ${word}"; continue; fi
+        IFS='|' read -r env flag def <<< "$entry"
+        if [[ "$word" != *=* ]]; then
+            if [[ "$def" == true || "$def" == false ]]; then val=true; else val="$1"; shift; fi
+        fi
+        [[ "$flag" == data-dir || "$val" == *'$'* ]] && continue
+        cur=$(env_get "$env")
+        [[ "$cur" == "$val" ]] && continue
+        if [[ -n "$cur" ]]; then
+            case "$flag" in
+                allow-manage | debug | chat-enabled | mtproto-enabled | dns-media-* | \
+                    github-relay-max-size | github-relay-ttl | github-relay-quota-gb) continue ;;
+                github-relay-enabled | mtproto-test-dcs) is_true "$cur" && continue ;;
+            esac
+            # The numbers and the branch let the file through at their default.
+            # ponytail: applied to every flag; only wrong for a string flag
+            # typed at its default over a different file value.
+            [[ "$val" == "$def" ]] && continue
+        fi
+        env_set "$env" "$val"
+        moved="${moved} ${env}"
+    done
+    # Only a unit with more than --data-dir: re-installs must not replace it.
+    $other && cp "$SERVICE_FILE" "$DATA_DIR/thefeed-server.service.bak"
+    [[ -n "$moved" ]] && echo -e "${yellow}Moved from the old unit into thefeed.env:${moved}${plain}"
+    [[ -n "$unknown" ]] && echo -e "${yellow}Not moved (unknown flags, kept in thefeed-server.service.bak):${unknown}${plain}"
+    return 0
 }
 
 # Helper: append every KEY=value line of the previous env file ($1) whose key
@@ -358,14 +412,79 @@ ask_chat_limits() {
     done
 }
 
+# Every setting thefeed-server reads, as "ENV|flag|default", the same as
+# internal/serverconfig (cmd/server/install_defaults_test.go keeps them
+# equal). thefeed.env gets every one, and an old unit's flags map back here.
+SERVER_SETTINGS=(
+    "THEFEED_DATA_DIR|data-dir|./data"
+    "THEFEED_LISTEN|listen|:53"
+    "THEFEED_DOMAIN|domain|"
+    "THEFEED_EXTRA_DOMAINS|extra-domains|"
+    "THEFEED_KEY|key|"
+    "THEFEED_CHANNELS|channels|"
+    "THEFEED_PRIVATE_CHANNELS|private-channels|"
+    "THEFEED_X_ACCOUNTS|x-accounts|"
+    "THEFEED_X_RSS_INSTANCES|x-rss-instances|"
+    "TELEGRAM_API_ID|api-id|"
+    "TELEGRAM_API_HASH|api-hash|"
+    "TELEGRAM_PHONE|phone|"
+    "THEFEED_NO_TELEGRAM|no-telegram|false"
+    "THEFEED_SESSION|session|"
+    "THEFEED_PADDING|padding|32"
+    "THEFEED_MSG_LIMIT|msg-limit|15"
+    "THEFEED_FETCH_INTERVAL|fetch-interval|10"
+    "THEFEED_ALLOW_MANAGE|allow-manage|false"
+    "THEFEED_DEBUG|debug|false"
+    "THEFEED_DNS_MEDIA_ENABLED|dns-media-enabled|false"
+    "THEFEED_DNS_MEDIA_MAX_SIZE_KB|dns-media-max-size|100"
+    "THEFEED_DNS_MEDIA_CACHE_TTL_MIN|dns-media-cache-ttl|600"
+    "THEFEED_DNS_MEDIA_COMPRESSION|dns-media-compression|gzip"
+    "THEFEED_CHAT_DOMAINS|chat-domains|"
+    "THEFEED_CHAT_ENABLED|chat-enabled|true"
+    "THEFEED_CHAT_SEND_PER_HOUR|chat-send-per-hour|30"
+    "THEFEED_CHAT_INBOX_CAP|chat-inbox-cap|50"
+    "THEFEED_CHAT_PER_PAIR_CAP|chat-per-pair-cap|10"
+    "THEFEED_CHAT_MAX_MSG_BYTES|chat-max-msg-bytes|500"
+    "THEFEED_CHAT_TTL_HOURS|chat-ttl-hours|72"
+    "THEFEED_CHAT_ACCOUNT_TTL_DAYS|chat-account-ttl-days|0"
+    "THEFEED_CHAT_MAX_ACCOUNTS|chat-max-accounts|0"
+    "THEFEED_CHAT_SYNC_SECONDS|chat-sync-seconds|1"
+    "THEFEED_MTPROTO_DOMAINS|mtproto-domains|"
+    "THEFEED_MTPROTO_ENABLED|mtproto-enabled|true"
+    "THEFEED_MTPROTO_MAX_TUNNELS|mtproto-max-tunnels|0"
+    "THEFEED_MTPROTO_IDLE_MINUTES|mtproto-idle-minutes|5"
+    "THEFEED_MTPROTO_BUFFER_KB|mtproto-buffer-kb|32"
+    "THEFEED_MTPROTO_DOWN_KB_PER_MIN|mtproto-down-kb-per-min|512"
+    "THEFEED_MTPROTO_DIAL_SECONDS|mtproto-dial-seconds|15"
+    "THEFEED_MTPROTO_TEST_DCS|mtproto-test-dcs|false"
+    "THEFEED_GITHUB_RELAY_ENABLED|github-relay-enabled|false"
+    "THEFEED_GITHUB_RELAY_TOKEN|github-relay-token|"
+    "THEFEED_GITHUB_RELAY_REPO|github-relay-repo|"
+    "THEFEED_GITHUB_RELAY_BRANCH|github-relay-branch|main"
+    "THEFEED_GITHUB_RELAY_MAX_SIZE_KB|github-relay-max-size|15360"
+    "THEFEED_GITHUB_RELAY_TTL_MIN|github-relay-ttl|600"
+    "THEFEED_GITHUB_RELAY_QUOTA_GB|github-relay-quota-gb|100"
+)
+
+# Helper: append each setting thefeed.env doesn't have yet, at its default.
+env_fill_defaults() {
+    local entry env flag def
+    for entry in "${SERVER_SETTINGS[@]}"; do
+        IFS='|' read -r env flag def <<< "$entry"
+        grep -q "^${env}=" "$DATA_DIR/thefeed.env" || printf '%s=%s\n' "$env" "$def" >> "$DATA_DIR/thefeed.env"
+    done
+}
+
 # Finishes the env file written by setup_config: applies the messenger limits
-# that were asked for, then carries over whatever else the old file had.
+# that were asked for, carries over whatever else the old file had, then adds
+# any setting still missing at its default.
 env_finish() {
     local old="$1" line
     while IFS= read -r line; do
         [[ -n "$line" ]] && env_set "${line%%=*}" "${line#*=}"
     done <<< "$chat_limit_values"
     env_carry_over "$old"
+    env_fill_defaults
     chmod 600 "$DATA_DIR/thefeed.env"
 }
 
@@ -407,7 +526,7 @@ setup_config() {
 
     # --- Private Telegram channels ---
     # Skipped in --no-telegram mode (joining needs a logged-in session).
-    if [[ "${THEFEED_NO_TELEGRAM:-}" != "1" ]]; then
+    if ! is_true "${THEFEED_NO_TELEGRAM:-}"; then
         if [[ -f "$DATA_DIR/private_channels.txt" ]]; then
             local pc_count
             pc_count=$(grep -cv '^#\|^$' "$DATA_DIR/private_channels.txt" 2>/dev/null || echo 0)
@@ -587,7 +706,7 @@ setup_config() {
     echo -e "${yellow}Allow remote management (send messages, add/remove channels)?${plain}"
     echo -e "  If enabled, anyone with the passphrase can manage channels."
     local allow_manage=""
-    if [[ "$cur_allow_manage" == "1" ]]; then
+    if is_true "$cur_allow_manage"; then
         read -rp "Enable remote management? [Y/n]: " allow_manage
         if [[ "$allow_manage" == "n" || "$allow_manage" == "N" ]]; then
             allow_manage="0"
@@ -631,7 +750,7 @@ setup_config() {
     echo -e "${yellow}DNS relay${plain} — files served block-by-block over DNS. Slower, works"
     echo -e "  in censored networks. Default 100 KB cap."
     local dns_default="N" dns_prompt="[y/N]"
-    if [[ "$cur_dns_enabled" == "1" ]]; then dns_default="Y" dns_prompt="[Y/n]"; fi
+    if is_true "$cur_dns_enabled"; then dns_default="Y" dns_prompt="[Y/n]"; fi
     local dns_enabled_in=""
     read -rp "Enable DNS relay? $dns_prompt: " dns_enabled_in
     if [[ -z "$dns_enabled_in" ]]; then dns_enabled_in="$dns_default"; fi
@@ -655,7 +774,7 @@ setup_config() {
     echo -e "${yellow}GitHub relay${plain} — files uploaded to a repo and pulled by clients over"
     echo -e "  plain HTTPS. Faster + bigger files; needs a personal access token."
     local gh_default="N" gh_prompt="[y/N]"
-    if [[ "$cur_gh_enabled" == "1" ]]; then gh_default="Y"; gh_prompt="[Y/n]"; fi
+    if is_true "$cur_gh_enabled"; then gh_default="Y"; gh_prompt="[Y/n]"; fi
     local gh_enabled_in=""
     read -rp "Enable GitHub relay? $gh_prompt: " gh_enabled_in
     if [[ -z "$gh_enabled_in" ]]; then gh_enabled_in="$gh_default"; fi
@@ -690,6 +809,32 @@ setup_config() {
         gh_ttl="${in:-$gh_ttl}"
     fi
 
+    # --- Admin panel ---
+    local cur_admin_host="" admin_hostname="" host_re='^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'
+    $is_update && cur_admin_host=$(env_get THEFEED_ADMIN_HOSTNAME)
+    echo ""
+    echo -e "${yellow}Admin panel${plain} — a web page to watch and manage this server, on port 443."
+    echo -e "  A hostname (an A record pointing here) gets a Let's Encrypt certificate;"
+    echo -e "  without one the panel uses a self-signed certificate."
+    while true; do
+        if [[ -n "$cur_admin_host" ]]; then
+            read -rp "Panel hostname [${cur_admin_host}, - for none]: " admin_hostname
+            admin_hostname="${admin_hostname:-$cur_admin_host}"
+            [[ "$admin_hostname" == "-" ]] && admin_hostname=""
+        else
+            read -rp "Panel hostname (empty = self-signed): " admin_hostname
+        fi
+        admin_hostname="${admin_hostname//[[:space:]]/}"
+        [[ -z "$admin_hostname" ]] && break
+        # thefeed-server answers DNS for its domain itself: no A record there.
+        if [[ "$admin_hostname" == "$domain" || "$admin_hostname" == *".${domain}" ]]; then
+            echo -e "${red}Must be outside ${domain}: thefeed answers that zone itself${plain}"
+            continue
+        fi
+        [[ "$admin_hostname" =~ $host_re ]] && break
+        echo -e "${red}Type a hostname like panel.example.com${plain}"
+    done
+
     # --- Telegram mode ---
     local cur_no_tg=""
     if $is_update; then
@@ -709,7 +854,7 @@ setup_config() {
     echo -e "     - Required for private channels and sending messages"
     echo ""
     local mode_default="1"
-    [[ "$cur_no_tg" != "1" && "$is_update" == "true" && -n "$(env_get TELEGRAM_API_ID)" && "$(env_get TELEGRAM_API_ID)" != "0" ]] && mode_default="2"
+    ! is_true "$cur_no_tg" && [[ "$is_update" == "true" && -n "$(env_get TELEGRAM_API_ID)" && "$(env_get TELEGRAM_API_ID)" != "0" ]] && mode_default="2"
     local mode_in=""
     while true; do
         read -rp "Choose mode [1/2] (default: ${mode_default}): " mode_in
@@ -727,6 +872,7 @@ setup_config() {
         listen_addr="${listen_addr:-${cur_listen:-0.0.0.0:53}}"
 
         cat > "$DATA_DIR/thefeed.env" <<ENVEOF
+THEFEED_DATA_DIR=${DATA_DIR}
 THEFEED_DOMAIN=${domain}
 THEFEED_EXTRA_DOMAINS=${extra_domains}
 THEFEED_CHAT_DOMAINS=${chat_domains}
@@ -752,6 +898,8 @@ THEFEED_GITHUB_RELAY_REPO=${gh_repo}
 THEFEED_GITHUB_RELAY_BRANCH=${gh_branch}
 THEFEED_GITHUB_RELAY_MAX_SIZE_KB=${gh_max_size}
 THEFEED_GITHUB_RELAY_TTL_MIN=${gh_ttl}
+THEFEED_ADMIN_HOSTNAME=${admin_hostname}
+THEFEED_ADMIN_RELEASE_REPO=${GITHUB_REPO}
 ENVEOF
         env_finish "$old_env"
         echo -e "${green}Config saved to ${DATA_DIR}/thefeed.env${plain}"
@@ -806,6 +954,7 @@ ENVEOF
     listen_addr="${listen_addr:-${cur_listen:-0.0.0.0:53}}"
 
     cat > "$DATA_DIR/thefeed.env" <<ENVEOF
+THEFEED_DATA_DIR=${DATA_DIR}
 THEFEED_DOMAIN=${domain}
 THEFEED_EXTRA_DOMAINS=${extra_domains}
 THEFEED_CHAT_DOMAINS=${chat_domains}
@@ -820,6 +969,7 @@ TELEGRAM_API_HASH=${api_hash}
 TELEGRAM_PHONE=${phone}
 THEFEED_LISTEN=${listen_addr}
 THEFEED_FETCH_INTERVAL=${fetch_interval}
+THEFEED_NO_TELEGRAM=0
 THEFEED_DNS_MEDIA_ENABLED=${dns_enabled}
 THEFEED_DNS_MEDIA_MAX_SIZE_KB=${dns_max_size}
 THEFEED_DNS_MEDIA_CACHE_TTL_MIN=${dns_ttl}
@@ -830,6 +980,8 @@ THEFEED_GITHUB_RELAY_REPO=${gh_repo}
 THEFEED_GITHUB_RELAY_BRANCH=${gh_branch}
 THEFEED_GITHUB_RELAY_MAX_SIZE_KB=${gh_max_size}
 THEFEED_GITHUB_RELAY_TTL_MIN=${gh_ttl}
+THEFEED_ADMIN_HOSTNAME=${admin_hostname}
+THEFEED_ADMIN_RELEASE_REPO=${GITHUB_REPO}
 ENVEOF
     env_finish "$old_env"
     echo -e "${green}Config saved to ${DATA_DIR}/thefeed.env${plain}"
@@ -879,20 +1031,8 @@ telegram_login() {
 install_service() {
     echo -e "${green}Installing systemd service...${plain}"
 
-    set -a
-    source "$DATA_DIR/thefeed.env"
-    set +a
-
-    local extra_flags=""
-    if [[ "${THEFEED_NO_TELEGRAM:-}" == "1" ]]; then
-        extra_flags="--no-telegram"
-    fi
-    if [[ "${THEFEED_ALLOW_MANAGE:-}" == "1" ]]; then
-        extra_flags="${extra_flags} --allow-manage"
-    fi
-    # All --dns-media-* and --github-relay-* settings come from THEFEED_*
-    # env vars, so the binary picks them up via EnvironmentFile alone.
-
+    # Only --data-dir: every setting comes from thefeed.env. A flag here
+    # would beat the file and silently undo the panel's edit of it.
     cat > "$SERVICE_FILE" <<SVCEOF
 [Unit]
 Description=thefeed DNS-based Telegram Feed Server
@@ -903,16 +1043,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${DATA_DIR}/thefeed.env
-ExecStart=${INSTALL_DIR}/thefeed-server \\
-    --data-dir ${DATA_DIR} \\
-    --domain \${THEFEED_DOMAIN} \\
-    --key \${THEFEED_KEY} \\
-    --x-accounts ${DATA_DIR}/x_accounts.txt \\
-    --x-rss-instances \${THEFEED_X_RSS_INSTANCES} \\
-    --api-id \${TELEGRAM_API_ID} \\
-    --api-hash \${TELEGRAM_API_HASH} \\
-    --phone \${TELEGRAM_PHONE} \\
-    --listen \${THEFEED_LISTEN} ${extra_flags}
+ExecStart=${INSTALL_DIR}/thefeed-server --data-dir ${DATA_DIR}
 
 Restart=on-failure
 RestartSec=10
@@ -939,6 +1070,79 @@ SVCEOF
 
     systemctl daemon-reload
     echo -e "${green}Service installed: thefeed-server${plain}"
+}
+
+# The panel's own unit. Nothing ties it to thefeed-server: it keeps running
+# while that one is stopped, restarted or updated, and can start it again.
+# Root and no sandboxing, because it manages that unit, writes thefeed.env,
+# reads the journal and can reboot. Its settings (THEFEED_ADMIN_*) live in
+# thefeed.env too.
+install_admin_service() {
+    echo -e "${green}Installing systemd service: thefeed-admin...${plain}"
+    cat > "$ADMIN_SERVICE_FILE" <<SVCEOF
+[Unit]
+Description=thefeed admin panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${INSTALL_DIR}
+EnvironmentFile=-${DATA_DIR}/thefeed.env
+ExecStart=${INSTALL_DIR}/thefeed-admin --data-dir ${DATA_DIR}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+    systemctl daemon-reload
+
+    # Browsers and Let's Encrypt reach the panel on 443.
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        ufw allow 443/tcp
+    fi
+}
+
+# Prints how to reach the panel: its URL, the setup code while no admin
+# exists, and the self-signed certificate's fingerprint to check the browser
+# warning against. $1 is when the panel was (re)started, for the journal.
+show_panel() {
+    local since="$1" host line="" i url
+    host=$(env_get THEFEED_ADMIN_HOSTNAME)
+    for i in $(seq 1 20); do
+        line=$(journalctl -u thefeed-admin --since "$since" --no-pager -o cat 2>/dev/null | grep 'admin: serving' | tail -1)
+        [[ -n "$line" ]] && break
+        sleep 1
+    done
+    echo -e "\n${green}═══════════════════════════════════════${plain}"
+    echo -e "${green}  Admin panel${plain}"
+    echo -e "${green}═══════════════════════════════════════${plain}"
+    if [[ -z "$line" ]]; then
+        echo -e "${red}The panel did not start. Is something else using port 443?${plain}"
+        echo -e "  See: ${blue}journalctl -u thefeed-admin -n 50 --no-pager${plain}"
+        return 0
+    fi
+    if [[ -n "$host" ]]; then
+        url="https://${host}/"
+    else
+        url="https://$(hostname -I 2>/dev/null | awk '{print $1}')/"
+        [[ "$url" == "https:///" ]] && url="https://<this server's IP>/"
+    fi
+    echo -e "  URL:          ${blue}${url}${plain}"
+    if [[ -f "${INSTALL_DIR}/admin/setup-code" ]]; then
+        echo -e "  Setup code:   ${green}$(cat "${INSTALL_DIR}/admin/setup-code")${plain} (works once, for 24 hours)"
+    else
+        echo -e "  Sign in with your admin account. Lost it? Run:"
+        echo -e "    ${blue}systemctl stop thefeed-admin && ${INSTALL_DIR}/thefeed-admin reset-admin && systemctl start thefeed-admin${plain}"
+    fi
+    if [[ -z "$host" ]]; then
+        echo -e "  Certificate:  self-signed, SHA-256 fingerprint"
+        echo -e "    ${line##*fingerprint }"
+        echo -e "  ${yellow}The browser warns about it: go on only if it shows this fingerprint.${plain}"
+    fi
 }
 
 start_service() {
@@ -1037,8 +1241,15 @@ install_thefeed() {
     fi
 
     # Download
-    download_binary "$version"
+    download_binary "$version" || exit 1
+    # Releases before the panel, and the GitLab mirror, have no thefeed-admin.
+    local have_panel=true
+    if ! download_binary "$version" thefeed-admin; then
+        have_panel=false
+        echo -e "${yellow}This release has no admin panel (thefeed-admin); installing without it.${plain}"
+    fi
 
+    migrate_unit_flags
     setup_config
     while IFS= read -r v; do
         unset "$v"
@@ -1046,7 +1257,7 @@ install_thefeed() {
     set -a
     source "$DATA_DIR/thefeed.env"
     set +a
-    if [[ "${THEFEED_NO_TELEGRAM:-}" != "1" ]]; then
+    if ! is_true "${THEFEED_NO_TELEGRAM:-}"; then
         # Only prompt for Telegram login if credentials changed or no session exists
         if [[ ! -f "$DATA_DIR/session.json" ]]; then
             telegram_login
@@ -1059,6 +1270,14 @@ install_thefeed() {
     fi
     install_service
     start_service
+    local panel_since=""
+    if $have_panel; then
+        install_admin_service
+        panel_since=$(date '+%Y-%m-%d %H:%M:%S')
+        systemctl enable thefeed-admin
+        # restart, not start: an update must run the new binary.
+        systemctl restart thefeed-admin
+    fi
 
     echo -e "\n${green}═══════════════════════════════════════${plain}"
     echo -e "${green}  thefeed ${version} installed successfully!${plain}"
@@ -1067,6 +1286,8 @@ install_thefeed() {
 
     # Print the import URI so the operator can share/import the feed right away.
     show_config
+    $have_panel && show_panel "$panel_since"
+    return 0
 }
 
 login_only() {
@@ -1113,14 +1334,17 @@ show_config() {
 uninstall_thefeed() {
     echo -e "${yellow}Uninstalling thefeed...${plain}"
 
-    systemctl stop thefeed-server 2>/dev/null || true
-    systemctl disable thefeed-server 2>/dev/null || true
-    rm -f "$SERVICE_FILE"
+    local unit
+    for unit in thefeed-admin thefeed-server; do
+        systemctl stop "$unit" 2>/dev/null || true
+        systemctl disable "$unit" 2>/dev/null || true
+    done
+    rm -f "$SERVICE_FILE" "$ADMIN_SERVICE_FILE"
     systemctl daemon-reload
 
     local remove_data=""
     if [[ -t 0 ]]; then
-        read -rp "Remove all data (config, session, binary)? [y/N]: " remove_data
+        read -rp "Remove all data (config, session, panel, binaries)? [y/N]: " remove_data
     else
         # When piped (curl | bash), stdin is not a terminal — default to keeping data
         echo -e "${yellow}Non-interactive mode: keeping data. Delete manually with: rm -rf ${INSTALL_DIR}${plain}"
@@ -1129,8 +1353,8 @@ uninstall_thefeed() {
         rm -rf "$INSTALL_DIR"
         echo -e "${green}All data removed${plain}"
     else
-        rm -f "${INSTALL_DIR}/thefeed-server"
-        echo -e "${green}Binary removed (data preserved in ${DATA_DIR})${plain}"
+        rm -f "${INSTALL_DIR}/thefeed-server" "${INSTALL_DIR}/thefeed-admin"
+        echo -e "${green}Binaries removed (data preserved in ${DATA_DIR}, the panel's in ${INSTALL_DIR}/admin)${plain}"
     fi
 
     echo -e "${green}thefeed uninstalled successfully${plain}"
@@ -1152,7 +1376,7 @@ show_help() {
     echo -e "  ${green}--github${plain} / ${green}--gitlab${plain}     Shortcut for --source github / --source gitlab"
     echo -e "  ${green}--login${plain}                Re-authenticate with Telegram"
     echo -e "  ${green}--config${plain}               Print the current server config import URI (domain, key, sk=, resolvers)"
-    echo -e "  ${green}--uninstall${plain}            Remove thefeed"
+    echo -e "  ${green}--uninstall${plain}            Remove thefeed and its admin panel"
     echo -e "  ${green}--help${plain}                 Show this help"
     echo ""
     echo -e "Examples:"
@@ -1178,6 +1402,26 @@ show_help() {
 }
 
 # Main
+# Sourced, as the Go tests do: define everything above, run nothing.
+(return 0 2>/dev/null) && return 0
+
+# check root
+[[ $EUID -ne 0 ]] && echo -e "${red}Fatal error:${plain} Please run this script with root privilege" && exit 1
+
+# Check OS and set release variable
+if [[ -f /etc/os-release ]]; then
+    source /etc/os-release
+    release=$ID
+elif [[ -f /usr/lib/os-release ]]; then
+    source /usr/lib/os-release
+    release=$ID
+else
+    echo -e "${red}Failed to check the system OS, please contact the author!${plain}" >&2
+    exit 1
+fi
+echo -e "OS: ${green}$release${plain}"
+echo -e "Arch: ${green}$(arch)${plain}"
+
 echo -e "${green}Running thefeed installer...${plain}"
 
 # Flags: --version <tag> / -v <tag> / positional <tag>, --pre, --list,

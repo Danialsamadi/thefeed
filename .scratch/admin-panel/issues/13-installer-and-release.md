@@ -1,6 +1,6 @@
 # 13 Installer and release workflow
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01, 04
 Spec: `.scratch/admin-panel/spec.md`, sections "Installer" and "Service, power and update" (checksums), plus Further Notes "Fork"
 
@@ -29,3 +29,13 @@ Spec: `.scratch/admin-panel/spec.md`, sections "Installer" and "Service, power a
 ## Notes
 
 - Ticket 14 runs this installer for real.
+
+## Comments
+
+Contracts other tickets rely on (2026-11-04):
+
+- `thefeed.env` also holds `THEFEED_ADMIN_HOSTNAME` (panel hostname, empty = self-signed) and `THEFEED_ADMIN_RELEASE_REPO` (owner/repo the installer used; ticket 12's default update source). The panel unit reads the file with `EnvironmentFile=-`.
+- Release assets: `thefeed-admin-linux-{amd64,arm64}`, plus `SHA256SUMS` with `sha256sum` lines (`<hex>  <name>`, no directory) over every asset.
+- A fork installs its own releases with `curl ... | sudo GITHUB_REPO=owner/repo bash`.
+- The settings table in `install.sh` must match `internal/serverconfig`: a new registry entry (e.g. 02's `THEFEED_CONTROL_SOCKET`) needs one row there, or `TestInstallScriptSettingsMatchRegistry` fails.
+- Not done: `.gitlab-ci.yml` doesn't build the panel (not in this ticket), so installs from the GitLab mirror skip it with a warning. Docker isn't changed: the panel needs systemd, the journal and root.
