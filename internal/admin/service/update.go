@@ -72,17 +72,17 @@ func (m *mod) update(ctx context.Context) error {
 	if err == nil {
 		_, err = m.Systemd.Run(ctx, "restart", unit)
 	}
-	return m.rolledBack(name, tag, old, "", err)
+	return m.rolledBack(name, tag, old, err)
 }
 
 // rolledBack ends an update to tag that wasn't healthy, once old is back;
-// more is said after that, and err is putting it back failing.
-func (m *mod) rolledBack(name, tag, old, more string, err error) error {
+// err is putting it back failing.
+func (m *mod) rolledBack(name, tag, old string, err error) error {
 	if err != nil {
 		return m.note(name, fmt.Errorf("%s didn't answer healthy within %d seconds, and putting %s back failed: %v", tag, healthWait/time.Second, old, err))
 	}
 	m.edit(func(sv *saved) { sv.Previous = "" })
-	msg := fmt.Sprintf("%s didn't answer healthy within %d seconds, so the panel rolled back to %s%s", tag, healthWait/time.Second, old, more)
+	msg := fmt.Sprintf("%s didn't answer healthy within %d seconds, so the panel rolled back to %s", tag, healthWait/time.Second, old)
 	m.line(msg, "")
 	return m.note(name, errors.New(msg+"."))
 }

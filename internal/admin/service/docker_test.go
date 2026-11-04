@@ -31,7 +31,6 @@ type engine struct {
 	registry map[string]string // image → the version it runs; "crash" never answers
 	images   map[string]bool   // pulled
 	c        map[string]any    // the container as inspect answers it; nil once removed
-	failed   map[string]any    // the one kept as thefeed-server-failed; nil if none
 	ids      int
 	calls    []string          // every request but inspect, as "POST /containers/thefeed-server/stop"
 	created  []map[string]any  // create bodies, in order
@@ -142,7 +141,7 @@ func (e *engine) handler() http.Handler {
 				msg(w, http.StatusBadRequest, "unsupported Content-Type header ("+r.Header.Get("Content-Type")+"): must be 'application/json'")
 				return
 			}
-			if name := r.PathValue("name"); name != "" && !(name == "thefeed-server" && e.c != nil || name == "thefeed-server-failed" && e.failed != nil) {
+			if name := r.PathValue("name"); name != "" && (e.c == nil || name != "thefeed-server") {
 				msg(w, http.StatusNotFound, "No such container: "+name)
 				return
 			}
@@ -181,22 +180,7 @@ func (e *engine) handler() http.Handler {
 		e.c["HostConfig"].(map[string]any)["RestartPolicy"] = body["RestartPolicy"]
 		reply(w, http.StatusOK, map[string]any{"Warnings": []string{}})
 	}))
-	mux.HandleFunc("POST /containers/{name}/rename", container(func(w http.ResponseWriter, r *http.Request) {
-		to := r.URL.Query().Get("name")
-		if to != "thefeed-server-failed" || e.failed != nil {
-			msg(w, http.StatusConflict, `Conflict. The container name "/`+to+`" is already in use.`)
-			return
-		}
-		e.failed, e.c = e.c, nil
-		e.failed["Name"] = "/" + to
-		w.WriteHeader(http.StatusNoContent)
-	}))
 	mux.HandleFunc("DELETE /containers/{name}", container(func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("name") == "thefeed-server-failed" {
-			e.failed = nil
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
 		if e.running() {
 			msg(w, http.StatusConflict, `cannot remove container "/thefeed-server": container is running: stop the container before removing or force remove`)
 			return
@@ -446,14 +430,8 @@ func TestDockerUpdatePullsAndRecreates(t *testing.T) {
 	}
 }
 
-// keepFailed is the calls that put compose's container back on its old
-// image, keeping the one that failed, stopped, as thefeed-server-failed.
-var keepFailed = []string{"POST /containers/thefeed-server/stop", "DELETE /containers/thefeed-server-failed",
-	"POST /containers/thefeed-server/rename?name=thefeed-server-failed", "POST /containers/create?name=thefeed-server", "POST /containers/thefeed-server/start"}
-
 // An image that doesn't answer healthy within 60 seconds is swapped back
 // out: the container goes back on the image it ran, and .env to its tag.
-// The one that failed is kept, stopped, for its log; a later one replaces it.
 func TestDockerUnhealthyUpdateGoesBack(t *testing.T) {
 	m := newMachine(t, "v0.41.0")
 	e := newEngine(t, m)
@@ -466,16 +444,13 @@ func TestDockerUnhealthyUpdateGoesBack(t *testing.T) {
 
 	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
 
-	if !strings.Contains(msg, "60 seconds") || !strings.Contains(msg, "v0.41.0") || !strings.Contains(msg, "docker logs thefeed-server-failed") {
-		t.Errorf("error = %q, want it to say v0.41.1 wasn't healthy in 60 seconds, v0.41.0 is back, and where the log is", msg)
+	if !strings.Contains(msg, "60 seconds") || !strings.Contains(msg, "v0.41.0") {
+		t.Errorf("error = %q, want it to say v0.41.1 wasn't healthy in 60 seconds and v0.41.0 is back", msg)
 	}
 	if m.now.Sub(start) < time.Minute {
 		t.Errorf("gave up after %s, want a minute", m.now.Sub(start))
 	}
-	e.wantCalls(slices.Concat([]string{pull + "v0.41.1"}, recreate, keepFailed)...)
-	if e.failed == nil || e.failed["Config"].(map[string]any)["Image"] != image+":v0.41.1" || e.failed["State"].(map[string]any)["Running"] != false {
-		t.Fatalf("thefeed-server-failed = %v, want the v0.41.1 container, stopped", e.failed)
-	}
+	e.wantCalls(slices.Concat([]string{pull + "v0.41.1"}, recreate, recreate)...)
 	if want := []map[string]any{recreated(t, "v0.41.1"), recreated(t, "v0.41.0")}; !reflect.DeepEqual(e.created, want) {
 		t.Fatalf("created %v\nwant %v", e.created, want)
 	}
@@ -488,13 +463,6 @@ func TestDockerUnhealthyUpdateGoesBack(t *testing.T) {
 	}
 	if got := p.actions(); !strings.Contains(got[0], "Update to v0.41.1: ") || !strings.Contains(got[0], "rolled back") {
 		t.Fatalf("action record = %q, want the update and its rollback first", got)
-	}
-
-	e.registry[image+":v0.41.2"] = "crash"
-	m.latest["sartoopjj/thefeed"] = "v0.41.2"
-	p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
-	if e.failed == nil || e.failed["Config"].(map[string]any)["Image"] != image+":v0.41.2" {
-		t.Fatalf("thefeed-server-failed = %v, want the v0.41.2 container in place of the older one", e.failed)
 	}
 }
 
