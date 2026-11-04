@@ -101,5 +101,19 @@ check('hours, rounded down', upFor(up, new Date(2026, 9, 23, 7, 57)), '23 hours'
 check('a day', upFor(up, new Date(2026, 9, 23, 7, 58)), '1 day');
 check('days', upFor('2026-10-22T07:58:00Z', new Date('2026-11-04T12:04:00Z')), '13 days');
 
+// ===== svcWords: Service and power says what it manages, a unit or a container =====
+const unitSvc = { server: 'systemd', name: 'thefeed-server', fixUnit: true };
+const dockerSvc = { server: 'docker', name: 'thefeed-server', fixUnit: false };
+check('a systemd unit', svcWords(unitSvc).title, 'Service thefeed-server');
+check('a container', svcWords(dockerSvc).title, 'Container thefeed-server');
+check('a container named otherwise', svcWords({ ...dockerSvc, name: 'feed' }).title, 'Container feed');
+check('the name is escaped', svcWords({ ...dockerSvc, name: '<b>' }).title, 'Container &lt;b&gt;');
+check('unit: start on boot', [svcWords(unitSvc).boot, svcWords(unitSvc).bootOn], ['Start when the machine boots', 'systemd starts it after a reboot.']);
+check('container: start with Docker', [svcWords(dockerSvc).boot, svcWords(dockerSvc).bootOn], ['Start with Docker', 'Docker starts it after a reboot, unless you stopped it.']);
+check('unit: flags shadow thefeed.env', [svcWords(unitSvc).shadow, svcWords(unitSvc).shadowWhy], ['Settings passed as flags',
+  "thefeed-server's systemd unit passes these, and a flag beats thefeed.env, so changes made here to them don't apply."]);
+check('container: remove them from compose', [svcWords(dockerSvc).shadow, svcWords(dockerSvc).shadowWhy], ['Settings in docker-compose.yml',
+  "thefeed-server's container gets these from docker-compose.yml, and they beat thefeed.env, so changes made here to them don't apply. Remove them from docker-compose.yml, then run <code>docker compose up -d</code>."]);
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
