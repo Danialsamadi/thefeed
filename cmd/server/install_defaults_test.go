@@ -465,6 +465,58 @@ download_binary v9.9.9 thefeed-admin`)
 	}
 }
 
+// --local installs the binaries a build left in a directory instead of
+// downloading a release, versioned as the binary says. The end-to-end suite
+// installs this way over e2e/testdata/thefeed.env with no answers on stdin:
+// every prompt keeps its value, and the panel's settings carry over.
+func TestInstallFromLocalBinaries(t *testing.T) {
+	seed := readFile(t, "../../e2e/testdata/thefeed.env") + "THEFEED_ADMIN_RELEASE_BASE_URL=http://127.0.0.1:1\n"
+	dir := installSh(t, "", `cat > "$DATA_DIR/thefeed.env" <<'E'
+`+seed+`E
+LOCAL_DIR="$T/build"; mkdir -p "$LOCAL_DIR"
+for n in thefeed-server thefeed-admin; do
+    printf '#!/bin/sh\necho "%s v0.98.0 (commit: e2e, built: now)"\n' "$n" > "$LOCAL_DIR/$n-linux-$(arch)"
+    chmod 755 "$LOCAL_DIR/$n-linux-$(arch)"
+done
+curl() { echo "$*" >> "$T/curl.log"; return 1; }
+reopen_tty() { :; }
+journalctl() { echo "admin: serving HTTPS on :443 with a self-signed certificate, SHA-256 fingerprint AA:BB"; }
+install_thefeed "" > "$T/out" 2>&1`)
+	out := readFile(t, filepath.Join(dir, "out"))
+	if !strings.Contains(out, "thefeed v0.98.0 installed successfully") {
+		t.Errorf("not installed as the local binary's version v0.98.0:\n%s", out)
+	}
+	for _, n := range []string{"thefeed-server", "thefeed-admin"} {
+		fi, err := os.Stat(filepath.Join(dir, "opt", n))
+		if err != nil || fi.Mode()&0o111 == 0 || !strings.Contains(readFile(t, filepath.Join(dir, "opt", n)), n+" v0.98.0") {
+			t.Errorf("%s: not the local build, executable (%v)", n, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "curl.log")); err == nil {
+		t.Errorf("downloaded with --local:\n%s", readFile(t, filepath.Join(dir, "curl.log")))
+	}
+	env := envFile(t, filepath.Join(dir, "opt", "data", "thefeed.env"))
+	for key, want := range map[string]string{
+		"THEFEED_DOMAIN":                 "t.e2e.test",
+		"THEFEED_KEY":                    "e2e-throwaway-passphrase",
+		"THEFEED_LISTEN":                 "127.0.0.1:5300",
+		"THEFEED_ADMIN_RELEASE_BASE_URL": "http://127.0.0.1:1",
+	} {
+		if got := one(t, env, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if v, ok := serverconfig.ParseBool(one(t, env, "THEFEED_NO_TELEGRAM")); !ok || !v {
+		t.Errorf("THEFEED_NO_TELEGRAM = %q, want on", env["THEFEED_NO_TELEGRAM"])
+	}
+	log := readFile(t, filepath.Join(dir, "systemctl.log"))
+	for _, cmd := range []string{"start thefeed-server", "restart thefeed-admin"} {
+		if !strings.Contains(log, cmd+"\n") {
+			t.Errorf("systemctl %s was not run; got:\n%s", cmd, log)
+		}
+	}
+}
+
 // A flag on the command line beats thefeed.env, so any setting the unit
 // passes as a flag silently undoes the panel's edit of it. The unit keeps
 // only --data-dir.

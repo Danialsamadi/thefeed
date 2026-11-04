@@ -1,5 +1,5 @@
 .PHONY: all build build-server build-admin build-client build-server-dev run-server run-client \
-	print-config print-pubkey report test clean lint fmt vet \
+	print-config print-pubkey report test e2e clean lint fmt vet \
 	ios-bind ios-bind-sim ios-bind-catalyst ios-build ios-test ios-clean ios-list-sims ios-deps \
 	mac-dmg mac-app mac-clean \
 	push push-tags release setup-remotes
@@ -143,6 +143,25 @@ report:
 
 test:
 	go test -race -count=1 ./...
+
+# The end-to-end suite (e2e/, opt-in): Linux with systemd, and sudo. Built as
+# you, run as root: it installs these builds on THIS machine with
+# install.sh --local, drives the panel, then uninstalls, so run it only on a
+# disposable host (README, "End-to-end tests"). The fake release it updates
+# from offers E2E_TO over the installed E2E_FROM.
+E2E_BUILD = $(BUILD_DIR)/e2e
+E2E_ARCH := $(shell go env GOARCH)
+E2E_FROM = v0.98.0
+E2E_TO   = v0.99.0
+e2e_flags = -trimpath -ldflags="-s -w -X github.com/sartoopjj/thefeed/internal/version.Version=$(1)"
+
+e2e:
+	@mkdir -p $(E2E_BUILD)/release
+	go build $(call e2e_flags,$(E2E_FROM)) -o $(E2E_BUILD)/$(BINARY_SERVER)-linux-$(E2E_ARCH) ./cmd/server
+	go build $(call e2e_flags,$(E2E_FROM)) -o $(E2E_BUILD)/$(BINARY_ADMIN)-linux-$(E2E_ARCH) ./cmd/thefeed-admin
+	go build $(call e2e_flags,$(E2E_TO)) -o $(E2E_BUILD)/release/$(BINARY_SERVER)-linux-$(E2E_ARCH) ./cmd/server
+	go test -c -tags e2e -o $(E2E_BUILD)/e2e.test ./e2e
+	cd e2e && sudo ../$(E2E_BUILD)/e2e.test -test.v -test.timeout 20m
 
 lint: vet
 	@command -v golangci-lint >/dev/null 2>&1 || echo "golangci-lint not found, skipping"

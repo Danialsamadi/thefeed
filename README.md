@@ -445,6 +445,29 @@ Then open `ios/Thefeed.xcodeproj` in Xcode to run on a device.
 
 **Releases:** pushing a tag starting with `v` triggers a CI build + release. A tag containing `-` (e.g. `v1.4.0-rc1`) is marked pre-release automatically. Assets include server/client binaries for every platform plus the Android APKs (`arm64-v8a`, `armeabi-v7a`).
 
+### End-to-end tests
+
+`make e2e` builds the server and admin panel, installs them on the machine it runs on with `scripts/install.sh --local build/e2e`, and drives the panel's HTTPS API. It covers first run, a restart, a live channel, stopping answers (checked with real DNS queries), stop and start, update and rollback from a local fake release, and the login lockout. Then it uninstalls everything. CI runs it on every pull request (`.github/workflows/e2e.yml`).
+
+It's not part of `go test ./...`: it sits behind the `e2e` build tag. It needs:
+
+- Linux with systemd;
+- `sudo`;
+- port 443 and `127.0.0.1:5300` free;
+- no thefeed installed, or it refuses to run.
+
+Use a throwaway VM or a container that runs systemd as PID 1, never a real server. For example, with [Multipass](https://multipass.run):
+
+```bash
+multipass launch 24.04 --name thefeed-e2e --memory 2G --disk 10G
+multipass shell thefeed-e2e
+# inside the VM: install Go 1.26+ (https://go.dev/dl) and make, copy this
+# checkout in (git clone, or multipass transfer), then in it:
+make e2e
+```
+
+A run cut short (Ctrl-C, a timeout) leaves the install behind, and the next run refuses to start. Clear it with `sudo bash scripts/install.sh --uninstall && sudo rm -rf /opt/thefeed`.
+
 ---
 
 ## Reference
