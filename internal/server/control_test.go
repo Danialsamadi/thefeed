@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
@@ -60,6 +61,9 @@ func startCtl(t *testing.T, tune func(*Config)) *ctlServer {
 	tme := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tmeHits.Add(1)
 		fmt.Fprint(w, `<div class="tgme_channel_info"></div>`)
+		if strings.HasSuffix(r.URL.Path, "/live") { // the only channel with a post
+			fmt.Fprint(w, `<div class="tgme_widget_message" data-post="live/7"><div class="tgme_widget_message_text">hello</div></div>`)
+		}
 	}))
 	t.Cleanup(tme.Close)
 	prev := telegramWebBases
@@ -245,8 +249,8 @@ func TestCtlStatus(t *testing.T) {
 	if st.GHRelay != nil {
 		t.Errorf("ghRelay = %+v, want absent with the relay off", st.GHRelay)
 	}
-	if st.MTProto == nil || *st.MTProto != (controlapi.MTProto{MaxTunnels: 7}) {
-		t.Errorf("mtproto = %+v, want no sessions and a cap of 7", st.MTProto)
+	if m := st.MTProto; m == nil || m.Sessions != 0 || m.LiveTunnels != 0 || m.MaxTunnels != 7 || len(m.DCs) == 0 {
+		t.Errorf("mtproto = %+v, want no sessions, a cap of 7 and Telegram's data centres", st.MTProto)
 	}
 }
 
@@ -381,6 +385,212 @@ func (c *ctlServer) raw(t *testing.T, method, path, body string) (int, string) {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
+}
+
+// check runs a feature's check through the panel's client.
+func (c *ctlServer) check(t *testing.T, feature string) *controlapi.CheckResult {
+	t.Helper()
+	res, err := c.api.(controlapi.Checker).Check(context.Background(), feature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func (c *ctlServer) status(t *testing.T) *controlapi.Status {
+	t.Helper()
+	st, err := c.api.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+func TestCtlCheckX(t *testing.T) {
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<rss><channel><title>jack</title><item>
+			<guid>https://nitter.example/jack/status/1234567890</guid>
+			<description>hello</description>
+			<pubDate>Mon, 02 Nov 2026 10:00:00 +0000</pubDate>
+		</item></channel></rss>`)
+	}))
+	t.Cleanup(good.Close)
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(busy.Close)
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close() // nothing listens there any more
+
+	// The failing ones first, so the fetch cycle also gets past them.
+	c := startCtl(t, func(cfg *Config) { cfg.XRSSInstances = busy.URL + "," + gone.URL + "," + good.URL })
+	waitFor(t, "a fetch cycle with posts", func() bool {
+		x := c.status(t).X
+		return x != nil && !x.LastPost.IsZero()
+	})
+
+	res := c.check(t, "x")
+	if res.OK || res.Summary != "1 of 3 instances answered." {
+		t.Errorf("check = ok %v, %q; want not ok, \"1 of 3 instances answered.\"", res.OK, res.Summary)
+	}
+	for _, u := range []string{busy.URL, gone.URL, good.URL} {
+		if !strings.Contains(res.Detail, u) {
+			t.Errorf("detail %q doesn't mention %s", res.Detail, u)
+		}
+	}
+
+	x := c.status(t).X
+	if x.Accounts != 1 {
+		t.Errorf("x accounts = %d, want 1", x.Accounts)
+	}
+	if len(x.Instances) != 3 {
+		t.Fatalf("x instances = %+v, want 3", x.Instances)
+	}
+	for i, want := range []struct {
+		host  string
+		ok    bool
+		error string
+	}{{busy.URL, false, "503"}, {gone.URL, false, "refused"}, {good.URL, true, ""}} {
+		got := x.Instances[i]
+		if got.Host != want.host || got.OK != want.ok || got.At.IsZero() {
+			t.Errorf("instance %d = %+v, want host %s, ok %v, a time", i, got, want.host, want.ok)
+		}
+		if want.error == "" && got.Error != "" || !strings.Contains(got.Error, want.error) {
+			t.Errorf("instance %d error = %q, want one mentioning %q", i, got.Error, want.error)
+		}
+	}
+}
+
+// A token not granted the repo: GitHub answers 403 with this message.
+func TestCtlCheckGH(t *testing.T) {
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"message":"Resource not accessible by personal access token","status":"403"}`)
+	}))
+	t.Cleanup(gh.Close)
+	prev := githubAPI
+	githubAPI = gh.URL
+	t.Cleanup(func() { githubAPI = prev })
+
+	c := startCtl(t, func(cfg *Config) { cfg.GitHubRelay.Enabled = true })
+	if st := c.status(t).GHRelay; st == nil || st.TokenDenied {
+		t.Fatalf("ghRelay at start = %+v, want on and not yet denied", st)
+	}
+	res := c.check(t, "gh")
+	if res.OK || res.Summary != "GitHub refuses the token for owner/relay." {
+		t.Errorf("check = ok %v, %q; want not ok, \"GitHub refuses the token for owner/relay.\"", res.OK, res.Summary)
+	}
+	if st := c.status(t).GHRelay; !st.TokenDenied {
+		t.Errorf("ghRelay after the check = %+v, want the token denied", st)
+	}
+}
+
+func TestCtlCheckTg(t *testing.T) {
+	up, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { up.Close() })
+	go func() {
+		for {
+			conn, err := up.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	down, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	down.Close() // refuses from now on
+
+	c := startCtl(t, func(cfg *Config) {
+		cfg.MTProtoDCAddrs = map[uint8]string{1: up.Addr().String(), 2: down.Addr().String()}
+	})
+	if got, want := fmt.Sprint(c.status(t).MTProto.DCs), fmt.Sprint([]controlapi.DC{{ID: 1}, {ID: 2}}); got != want {
+		t.Errorf("dcs before any dial = %s, want %s", got, want)
+	}
+
+	res := c.check(t, "tg")
+	if res.OK || res.Summary != "1 of 2 data centres answered." {
+		t.Errorf("check = ok %v, %q; want not ok, \"1 of 2 data centres answered.\"", res.OK, res.Summary)
+	}
+	dcs := c.status(t).MTProto.DCs
+	if len(dcs) != 2 {
+		t.Fatalf("dcs = %+v, want 2", dcs)
+	}
+	if dc := dcs[0]; dc.ID != 1 || !dc.OK || dc.Error != "" || dc.At.IsZero() || dc.FailuresLastHour != 0 {
+		t.Errorf("dc1 = %+v, want a good dial and no failures", dc)
+	}
+	if dc := dcs[1]; dc.ID != 2 || dc.OK || !strings.Contains(dc.Error, "refused") || dc.At.IsZero() || dc.FailuresLastHour != 1 {
+		t.Errorf("dc2 = %+v, want a refused dial, counted once", dc)
+	}
+}
+
+func TestCtlCheckChat(t *testing.T) {
+	c := startCtl(t, nil)
+	res := c.check(t, "chat")
+	if !res.OK || res.Summary != "stored, read back and deleted a test message." {
+		t.Errorf("check = ok %v, %q (%s); want ok, \"stored, read back and deleted a test message.\"", res.OK, res.Summary, res.Detail)
+	}
+
+	c.stop() // let go of chat.db
+	db, err := bolt.Open(filepath.Join(c.dir, "chat.db"), 0o600, &bolt.Options{ReadOnly: true, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.View(func(tx *bolt.Tx) error {
+		return tx.ForEach(func(name []byte, b *bolt.Bucket) error {
+			if n := b.Stats().KeyN; string(name) != "chat_accounts" || n != 0 {
+				t.Errorf("chat.db has bucket %q with %d keys, want only an empty chat_accounts", name, n)
+			}
+			return nil
+		})
+	})
+}
+
+// @news's page has no posts, so it counts as a failed fetch; @live has one.
+func TestCtlCheckChan(t *testing.T) {
+	c := startCtl(t, nil)
+	var ch *controlapi.Channels
+	waitFor(t, "the first fetch cycle", func() bool {
+		ch = c.status(t).Channels
+		return ch != nil && len(ch.Cycles) == 1
+	})
+	if ch.IntervalMs != 600000 {
+		t.Errorf("interval = %d ms, want the default 10 minutes", ch.IntervalMs)
+	}
+	if cy := ch.Cycles[0]; cy.Fetched != 0 || cy.Total != 1 || cy.Posts != 0 || cy.Start.IsZero() {
+		t.Errorf("first cycle = %+v, want 0 of 1 channels fetched, no posts, a start", cy)
+	}
+
+	if err := os.WriteFile(filepath.Join(c.dir, "channels.txt"), []byte("@news\n@live\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.api.ReloadChannels(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res := c.check(t, "chan")
+	if res.OK || res.Summary != "1 of 2 channels fetched, 1 post." {
+		t.Errorf("check = ok %v, %q; want not ok, \"1 of 2 channels fetched, 1 post.\"", res.OK, res.Summary)
+	}
+	cycles := c.status(t).Channels.Cycles
+	if cy := cycles[len(cycles)-1]; cy.Fetched != 1 || cy.Total != 2 || cy.Posts != 1 {
+		t.Errorf("last cycle = %+v, want 1 of 2 channels fetched, 1 post", cy)
+	}
+}
+
+// The panel checks the feed itself, and dnsm has no check; gh is off here.
+func TestCtlCheckOff(t *testing.T) {
+	c := startCtl(t, nil)
+	for feature, want := range map[string]string{"feed": "404", "dnsm": "404", "nope": "404", "gh": "409 Conflict: gh is off"} {
+		if _, err := c.api.(controlapi.Checker).Check(context.Background(), feature); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("check %s: error %v, want one with %q", feature, err, want)
+		}
+	}
 }
 
 func TestCtlNoSecrets(t *testing.T) {

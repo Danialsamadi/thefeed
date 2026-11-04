@@ -74,7 +74,8 @@ type Config struct {
 	// can apply to a client that pulls files through it.
 	MTProtoDownKBPerMin int
 	MTProtoDialTimeout  time.Duration
-	MTProtoTestDCs      bool // dial Telegram's test DCs
+	MTProtoTestDCs      bool             // dial Telegram's test DCs
+	MTProtoDCAddrs      map[uint8]string // overrides the DC addresses by id; see MTProtoConfig.DCAddrs
 
 	// ControlSocket serves the admin panel's control endpoint on
 	// <DataDir>/control.sock. Effective is what its status reports as the
@@ -271,6 +272,7 @@ func (s *Server) Run(ctx context.Context) error {
 				DownBytesPerMin: s.cfg.MTProtoDownKBPerMin * 1024,
 				DialTimeout:     s.cfg.MTProtoDialTimeout,
 				TestDCs:         s.cfg.MTProtoTestDCs,
+				DCAddrs:         s.cfg.MTProtoDCAddrs,
 				Debug:           s.cfg.Debug,
 				QueryKey:        queryKey,
 				Ek:              ek,

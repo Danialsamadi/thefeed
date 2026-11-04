@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
 )
 
@@ -46,6 +47,7 @@ type PublicReader struct {
 	fetchInterval time.Duration
 
 	refreshCh chan struct{}
+	cycles    cycleLog // for the control endpoint
 }
 
 // SetFetchInterval overrides the default 10m fetch cadence. Caller must
@@ -140,7 +142,7 @@ func (pr *PublicReader) UpdateChannels(channels []string) {
 func (pr *PublicReader) fetchAll(ctx context.Context) {
 	log.Printf("[public] fetch cycle started for %d channels", len(pr.channels))
 	start := time.Now()
-	var fetched, failed, skipped int
+	var fetched, failed, skipped, posts int
 	pr.mu.RLock()
 	cacheTTL := pr.cacheTTL
 	pr.mu.RUnlock()
@@ -161,6 +163,7 @@ func (pr *PublicReader) fetchAll(ctx context.Context) {
 			failed++
 			continue
 		}
+		posts += len(msgs)
 
 		// Merge new messages with previously cached ones to accumulate history.
 		if ok && len(cached.msgs) > 0 {
@@ -182,6 +185,8 @@ func (pr *PublicReader) fetchAll(ctx context.Context) {
 	}
 	log.Printf("[public] fetch cycle done in %s: %d fetched, %d failed, %d skipped, %d total",
 		time.Since(start).Round(time.Millisecond), fetched, failed, skipped, len(pr.channels))
+	pr.cycles.add(controlapi.FetchCycle{Start: start, DurationMs: time.Since(start).Milliseconds(),
+		Fetched: fetched + skipped, Total: fetched + failed + skipped, Posts: posts})
 	// Fetch avatars for the same channel set — same cadence, best-effort.
 	// Public mode has no MTProto session so we scrape them off t.me/s/<u>.
 	pr.fetchAllPublicProfilePhotos(ctx)
