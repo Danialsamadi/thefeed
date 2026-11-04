@@ -1,6 +1,6 @@
 # 03 Reader health detail and per-feature checks
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 Spec: `.scratch/admin-panel/spec.md`, the control endpoint's "Reader changes" and `POST checks/{feature}`
 

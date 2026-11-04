@@ -8,9 +8,11 @@
 //	POST /channels/reload   re-read channels.txt and apply it live
 //	POST /refresh           fetch everything now
 //	POST /answering         {"on": bool}; off leaves DNS unanswered
+//	POST /checks/{feature}  run that feature's check now; CheckResult
 //
-// POSTs answer 204 on success. Any other status is an error whose body is
-// the reason, in plain text.
+// POSTs answer 204 on success, except checks, which answer 200 with a
+// CheckResult whether or not the feature passed. Any other status is an
+// error whose body is the reason, in plain text.
 //
 // In Status, a feature that is off is left out (a nil pointer), so "off"
 // never looks like "on with zero traffic".
@@ -24,6 +26,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -34,10 +37,12 @@ const SocketName = "control.sock"
 type Status struct {
 	Server     Server           `json:"server"`
 	Feed       Feed             `json:"feed"`
+	Channels   *Channels        `json:"channels,omitempty"`
 	Chat       *Chat            `json:"chat,omitempty"`
 	MediaCache *MediaCacheStats `json:"mediaCache,omitempty"`
 	GHRelay    *RelayStatus     `json:"ghRelay,omitempty"`
 	MTProto    *MTProto         `json:"mtproto,omitempty"`
+	X          *X               `json:"x,omitempty"`
 }
 
 // Server is the running process.
@@ -75,9 +80,57 @@ type Chat struct {
 
 // MTProto is the Telegram-over-DNS tunnel.
 type MTProto struct {
-	Sessions    int `json:"sessions"`    // users connected; the cap counts these
-	LiveTunnels int `json:"liveTunnels"` // sockets open to Telegram right now
-	MaxTunnels  int `json:"maxTunnels"`  // 0 means uncapped
+	Sessions    int  `json:"sessions"`    // users connected; the cap counts these
+	LiveTunnels int  `json:"liveTunnels"` // sockets open to Telegram right now
+	MaxTunnels  int  `json:"maxTunnels"`  // 0 means uncapped
+	DCs         []DC `json:"dcs"`         // every data centre the relay dials, by id
+}
+
+// DC is one Telegram data centre's dials, from tunnels and checks.
+type DC struct {
+	ID               int       `json:"id"`
+	OK               bool      `json:"ok"`              // the last dial connected
+	Error            string    `json:"error,omitempty"` // the last failed dial's, kept after good ones
+	DialMs           int64     `json:"dialMs"`          // how long the last dial took
+	At               time.Time `json:"at,omitzero"`     // the last dial; zero: never dialled
+	FailuresLastHour int       `json:"failuresLastHour"`
+}
+
+// Channels is the Telegram channel reader, logged in or public.
+type Channels struct {
+	IntervalMs int64        `json:"intervalMs"` // between automatic cycles
+	Cycles     []FetchCycle `json:"cycles"`     // the last 10, oldest first
+}
+
+// FetchCycle is one pass over every channel.
+type FetchCycle struct {
+	Start      time.Time `json:"start"`
+	DurationMs int64     `json:"durationMs"`
+	// Fetched is the channels whose posts are fresh after the cycle: read
+	// now, or skipped because the cache was still fresh. Total less Fetched
+	// is the channels that failed.
+	Fetched int `json:"fetched"`
+	Total   int `json:"total"`
+	Posts   int `json:"posts"` // read this cycle
+}
+
+// X is the X reader, which reads accounts through Nitter instances.
+type X struct {
+	Accounts int `json:"accounts"`
+	// LastPost is when the reader last got an account's posts.
+	LastPost  time.Time  `json:"lastPost,omitzero"`
+	Instances []Instance `json:"instances"` // in the configured order
+}
+
+// Instance is one Nitter instance's last result, from a fetch or a check.
+// A fetch stops at the first instance that answers, so the ones after it
+// keep older results.
+type Instance struct {
+	Host      string    `json:"host"` // scheme://host, as in the config
+	OK        bool      `json:"ok"`
+	Error     string    `json:"error,omitempty"`
+	LatencyMs int64     `json:"latencyMs"`
+	At        time.Time `json:"at,omitzero"` // zero: not tried yet
 }
 
 // MediaCacheStats is the media cache's counters.
@@ -115,6 +168,21 @@ type RelayStatus struct {
 type Answering struct {
 	On *bool `json:"on"`
 }
+
+// CheckResult is POST /checks/{feature}. Feature ids are the panel's: x,
+// tg, chan, chat and gh. The feed and dnsm features have no check here.
+type CheckResult struct {
+	OK      bool   `json:"ok"`
+	Summary string `json:"summary"` // one sentence for the operator
+	Detail  string `json:"detail"`  // each instance or data centre, as logged
+}
+
+// Checker runs a feature's check. The Client from New is a Checker too.
+type Checker interface {
+	Check(ctx context.Context, feature string) (*CheckResult, error)
+}
+
+var _ Checker = (*client)(nil)
 
 // Client is what the admin panel needs from the running server. New returns
 // the real one; the panel's tests fake it.
@@ -156,6 +224,14 @@ func (c *client) Refresh(ctx context.Context) error {
 
 func (c *client) SetAnswering(ctx context.Context, on bool) error {
 	return c.do(ctx, http.MethodPost, "/answering", Answering{On: &on}, nil)
+}
+
+func (c *client) Check(ctx context.Context, feature string) (*CheckResult, error) {
+	var res CheckResult
+	if err := c.do(ctx, http.MethodPost, "/checks/"+url.PathEscape(feature), nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
 
 func (c *client) do(ctx context.Context, method, path string, in, out any) error {

@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
 	"github.com/sartoopjj/thefeed/internal/serverconfig"
 )
@@ -39,6 +40,11 @@ type XPublicReader struct {
 	fetchInterval time.Duration
 
 	refreshCh chan struct{}
+
+	// For the control endpoint, guarded by mu: each instance's latest
+	// result, and when an account's posts last came in.
+	results  map[string]controlapi.Instance
+	lastPost time.Time
 }
 
 // SetFetchInterval overrides the default 10m fetch cadence.
@@ -224,60 +230,9 @@ func (xr *XPublicReader) fetchAll(ctx context.Context) {
 func (xr *XPublicReader) fetchAccount(ctx context.Context, username string) ([]protocol.Message, string, error) {
 	var lastErr error
 	for _, instance := range xr.instances {
-		u := strings.TrimSuffix(instance, "/") + "/" + url.PathEscape(username) + "/rss"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		msgs, sources, title, err := xr.tryInstance(ctx, instance, username)
 		if err != nil {
-			log.Printf("[x] @%s: instance %s: request build error: %v", username, instance, err)
-			lastErr = err
-			continue
-		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; thefeed/1.0; +https://github.com/sartoopjj/thefeed)")
-		req.Header.Set("Accept", "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8")
-
-		resp, err := xr.client.Do(req)
-		if err != nil {
-			log.Printf("[x] @%s: instance %s: network error: %v", username, instance, err)
-			lastErr = err
-			continue
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxXRSSBodyBytes))
-		if cerr := resp.Body.Close(); cerr != nil {
-			log.Printf("[x] close response body: %v", cerr)
-		}
-		if readErr != nil {
-			log.Printf("[x] @%s: instance %s: body read error: %v", username, instance, readErr)
-			lastErr = readErr
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("[x] @%s: instance %s: HTTP %s", username, instance, resp.Status)
-			lastErr = fmt.Errorf("%s: unexpected HTTP status %s", instance, resp.Status)
-			continue
-		}
-
-		msgs, sources, title, err := parseXRSSMessagesWithMedia(body, username)
-		if err != nil {
-			log.Printf("[x] @%s: instance %s: parse error: %v", username, instance, err)
 			lastErr = fmt.Errorf("%s: %w", instance, err)
-			continue
-		}
-		// Filter out garbled messages (invalid UTF-8 or mostly non-printable).
-		cleaned := msgs[:0]
-		cleanedSources := sources[:0]
-		for i, m := range msgs {
-			if isReadableText(m.Text) {
-				cleaned = append(cleaned, m)
-				if i < len(sources) {
-					cleanedSources = append(cleanedSources, sources[i])
-				} else {
-					cleanedSources = append(cleanedSources, mediaSource{})
-				}
-			} else {
-				log.Printf("[x] @%s: skipping garbled message ID=%d (len=%d)", username, m.ID, len(m.Text))
-			}
-		}
-		if len(cleaned) == 0 {
-			lastErr = fmt.Errorf("%s: all %d messages were garbled", instance, len(msgs))
 			continue
 		}
 		// Run image downloads when a media cache is attached. Each Nitter
@@ -285,15 +240,90 @@ func (xr *XPublicReader) fetchAccount(ctx context.Context, username string) ([]p
 		// non-image media types we have no public URL to fetch on X, so the
 		// downstream rendering simply falls back to the legacy [TAG]\ncaption
 		// form for those.
-		if cache := xr.feed.MediaCache(); cache != nil && len(cleanedSources) > 0 {
-			applyHTTPMediaSources(ctx, cache, cleaned, cleanedSources)
+		if cache := xr.feed.MediaCache(); cache != nil && len(sources) > 0 {
+			applyHTTPMediaSources(ctx, cache, msgs, sources)
 		}
-		return cleaned, title, nil
+		xr.mu.Lock()
+		xr.lastPost = time.Now()
+		xr.mu.Unlock()
+		return msgs, title, nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no Nitter instances configured")
 	}
 	return nil, "", lastErr
+}
+
+// tryInstance reads username's posts from one instance, and keeps the
+// result as that instance's latest, for the control endpoint.
+func (xr *XPublicReader) tryInstance(ctx context.Context, instance, username string) ([]protocol.Message, []mediaSource, string, error) {
+	start := time.Now()
+	msgs, sources, title, err := xr.readInstance(ctx, instance, username)
+	res := controlapi.Instance{Host: instance, OK: err == nil, LatencyMs: time.Since(start).Milliseconds(), At: time.Now()}
+	if err != nil {
+		res.Error = err.Error()
+	}
+	xr.mu.Lock()
+	if xr.results == nil {
+		xr.results = map[string]controlapi.Instance{}
+	}
+	xr.results[instance] = res
+	xr.mu.Unlock()
+	return msgs, sources, title, err
+}
+
+func (xr *XPublicReader) readInstance(ctx context.Context, instance, username string) ([]protocol.Message, []mediaSource, string, error) {
+	u := strings.TrimSuffix(instance, "/") + "/" + url.PathEscape(username) + "/rss"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		log.Printf("[x] @%s: instance %s: request build error: %v", username, instance, err)
+		return nil, nil, "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; thefeed/1.0; +https://github.com/sartoopjj/thefeed)")
+	req.Header.Set("Accept", "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8")
+
+	resp, err := xr.client.Do(req)
+	if err != nil {
+		log.Printf("[x] @%s: instance %s: network error: %v", username, instance, err)
+		return nil, nil, "", err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxXRSSBodyBytes))
+	if cerr := resp.Body.Close(); cerr != nil {
+		log.Printf("[x] close response body: %v", cerr)
+	}
+	if readErr != nil {
+		log.Printf("[x] @%s: instance %s: body read error: %v", username, instance, readErr)
+		return nil, nil, "", readErr
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[x] @%s: instance %s: HTTP %s", username, instance, resp.Status)
+		return nil, nil, "", fmt.Errorf("unexpected HTTP status %s", resp.Status)
+	}
+
+	msgs, sources, title, err := parseXRSSMessagesWithMedia(body, username)
+	if err != nil {
+		log.Printf("[x] @%s: instance %s: parse error: %v", username, instance, err)
+		return nil, nil, "", err
+	}
+	// Filter out garbled messages (invalid UTF-8 or mostly non-printable).
+	cleaned := msgs[:0]
+	cleanedSources := sources[:0]
+	for i, m := range msgs {
+		if isReadableText(m.Text) {
+			cleaned = append(cleaned, m)
+			if i < len(sources) {
+				cleanedSources = append(cleanedSources, sources[i])
+			} else {
+				cleanedSources = append(cleanedSources, mediaSource{})
+			}
+		} else {
+			log.Printf("[x] @%s: skipping garbled message ID=%d (len=%d)", username, m.ID, len(m.Text))
+		}
+	}
+	if len(cleaned) == 0 {
+		return nil, nil, "", fmt.Errorf("all %d messages were garbled", len(msgs))
+	}
+	return cleaned, cleanedSources, title, nil
 }
 
 type xRSS struct {

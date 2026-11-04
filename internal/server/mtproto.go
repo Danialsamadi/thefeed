@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gotd/td/telegram/dcs"
+	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
 )
 
@@ -105,7 +106,8 @@ type mtpTunnel struct {
 	// tens of seconds a message takes to arrive over DNS, so the dial waits
 	// until there is something to send instead of racing that timer.
 	conn    net.Conn
-	host    string // dc address, dialled on first flush
+	host    string        // dc address, dialled on first flush
+	relay   *MTProtoRelay // keeps the dial stats; nil in some tests
 	dialing sync.Mutex
 	dialDC  uint8
 	dialTO  time.Duration
@@ -157,6 +159,38 @@ type MTProtoRelay struct {
 	// handshake tag, and expire quickly so a flood cannot pin memory.
 	sessions   map[[protocol.ChatSelectorSize]byte]*mtpSession
 	handshakes map[[protocol.ChatSelectorSize]byte]*mtpHandshake
+
+	// dials is each data centre's dial stats, for the control endpoint.
+	dialMu sync.Mutex
+	dials  map[uint8]*dcDials
+}
+
+type dcDials struct {
+	last  controlapi.DC
+	fails window // one-minute slots: the last hour
+}
+
+// noteDial records a dial to dc, from a tunnel or a check.
+func (r *MTProtoRelay) noteDial(dc uint8, took time.Duration, err error) {
+	if r == nil {
+		return
+	}
+	now := time.Now()
+	r.dialMu.Lock()
+	defer r.dialMu.Unlock()
+	if r.dials == nil {
+		r.dials = map[uint8]*dcDials{}
+	}
+	d := r.dials[dc]
+	if d == nil {
+		d = &dcDials{fails: window{step: time.Minute}}
+		r.dials[dc] = d
+	}
+	d.last = controlapi.DC{ID: int(dc), OK: err == nil, Error: d.last.Error, DialMs: took.Milliseconds(), At: now}
+	if err != nil {
+		d.last.Error = err.Error()
+		d.fails.add(now)
+	}
 }
 
 type mtpSession struct {
@@ -649,7 +683,7 @@ func (r *MTProtoRelay) open(ref [protocol.ChatSelectorSize]byte, sess *mtpSessio
 	// cell at a time, so a connection opened now is always dead before the
 	// client's first byte reaches it.
 	t := &mtpTunnel{
-		host: host, dialDC: dc, dialTO: r.cfg.DialTimeout,
+		host: host, dialDC: dc, dialTO: r.cfg.DialTimeout, relay: r,
 		lastSeen: now, bufCap: r.cfg.BufferBytes,
 		rateCap: r.cfg.DownBytesPerMin, debug: r.cfg.Debug,
 	}
@@ -753,7 +787,9 @@ func (t *mtpTunnel) ensureConn() (net.Conn, error) {
 		return conn, nil
 	}
 
+	start := time.Now()
 	conn, err := net.DialTimeout("tcp", t.host, t.dialTO)
+	t.relay.noteDial(t.dialDC, time.Since(start), err)
 	if err != nil {
 		log.Printf("[mtproto] dial dc%d: %v", t.dialDC, err)
 		return nil, err

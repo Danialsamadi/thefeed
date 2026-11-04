@@ -600,6 +600,12 @@ func (g *GitHubRelay) probeRecovery(ctx context.Context) {
 	if !healthy || prev {
 		return
 	}
+	g.resumeLocked()
+}
+
+// resumeLocked leaves a parked state: the remote is usable again. Caller
+// must hold g.mu.
+func (g *GitHubRelay) resumeLocked() {
 	g.failStreak = 0
 	g.retryAfter = time.Time{}
 	g.quotaExhausted = false
