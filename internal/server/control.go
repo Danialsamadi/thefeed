@@ -108,7 +108,7 @@ func (c *control) status() controlapi.Status {
 		sessions, max := d.mtproto.Stats()
 		st.MTProto = &controlapi.MTProto{Sessions: sessions, LiveTunnels: d.mtproto.LiveTunnels(), MaxTunnels: max, DCs: d.mtproto.dcStats(time.Now())}
 	}
-	if cycles, every, _ := d.channelReader(); cycles != nil {
+	if cycles, every := d.channelReader(); cycles != nil {
 		st.Channels = &controlapi.Channels{IntervalMs: every.Milliseconds(), Cycles: cycles.snapshot()}
 	}
 	if x := d.xReader; x != nil {
@@ -134,7 +134,7 @@ const probeTimeout = 10 * time.Second
 // feature that is off.
 func (c *control) checks() map[string]func(context.Context) controlapi.CheckResult {
 	d := c.dns
-	m := map[string]func(context.Context) controlapi.CheckResult{"x": nil, "gh": nil, "tg": nil, "chat": nil, "chan": nil}
+	m := map[string]func(context.Context) controlapi.CheckResult{"x": nil, "gh": nil, "tg": nil, "chat": nil}
 	if d.xReader != nil {
 		m["x"] = d.xReader.check
 	}
@@ -147,65 +147,33 @@ func (c *control) checks() map[string]func(context.Context) controlapi.CheckResu
 	if d.chat != nil {
 		m["chat"] = d.chat.store.check
 	}
-	if cycles, _, _ := d.channelReader(); cycles != nil {
-		m["chan"] = d.checkChannels
-	}
 	return m
 }
 
-// cycleWait bounds how long the chan check waits for its fetch cycle, inside
-// the panel client's 30 seconds. A longer cycle carries on and shows up in
-// status when it's done.
-const cycleWait = 20 * time.Second
-
-// checkChannels runs a fetch cycle now and reports it.
-func (d *DNSServer) checkChannels(ctx context.Context) controlapi.CheckResult {
-	cycles, _, tag := d.channelReader()
-	asked := time.Now()
-	d.channelCtl.RequestRefresh()
-	ctx, cancel := context.WithTimeout(ctx, cycleWait)
-	defer cancel()
-	res := controlapi.CheckResult{Summary: fmt.Sprintf("no fetch cycle finished within %s; it may still be running.", cycleWait)}
-	if cy, ok := cycles.since(ctx, asked); ok {
-		posts := "posts"
-		if cy.Posts == 1 {
-			posts = "post"
-		}
-		res = controlapi.CheckResult{
-			OK:      cy.Fetched == cy.Total,
-			Summary: fmt.Sprintf("%d of %d channels fetched, %d %s.", cy.Fetched, cy.Total, cy.Posts, posts),
-			Detail:  fmt.Sprintf("took %d ms", cy.DurationMs),
-		}
-	}
-	log.Printf("%s check: %s %s", tag, res.Summary, res.Detail)
-	return res
-}
-
-// channelReader is the running Telegram channel reader's fetch cycles,
-// interval and log tag, or a nil log without one.
-func (d *DNSServer) channelReader() (*cycleLog, time.Duration, string) {
+// channelReader is the running Telegram channel reader's fetch cycles and
+// interval, or a nil log without one.
+func (d *DNSServer) channelReader() (*cycleLog, time.Duration) {
 	switch r := d.channelCtl.(type) {
 	case *TelegramReader:
 		if r != nil {
 			r.mu.RLock()
 			defer r.mu.RUnlock()
-			return &r.cycles, r.fetchInterval, "[telegram]"
+			return &r.cycles, r.fetchInterval
 		}
 	case *PublicReader:
 		if r != nil {
 			r.mu.RLock()
 			defer r.mu.RUnlock()
-			return &r.cycles, r.fetchInterval, "[public]"
+			return &r.cycles, r.fetchInterval
 		}
 	}
-	return nil, 0, ""
+	return nil, 0
 }
 
 // cycleLog is a channel reader's last fetch cycles.
 type cycleLog struct {
 	mu     sync.Mutex
 	cycles []controlapi.FetchCycle // oldest first
-	added  chan struct{}           // closed by the next add
 }
 
 func (l *cycleLog) add(c controlapi.FetchCycle) {
@@ -215,38 +183,12 @@ func (l *cycleLog) add(c controlapi.FetchCycle) {
 	if n := len(l.cycles); n > 10 {
 		l.cycles = l.cycles[n-10:]
 	}
-	if l.added != nil {
-		close(l.added)
-		l.added = nil
-	}
 }
 
 func (l *cycleLog) snapshot() []controlapi.FetchCycle {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]controlapi.FetchCycle{}, l.cycles...)
-}
-
-// since waits for a cycle that started at t or later.
-func (l *cycleLog) since(ctx context.Context, t time.Time) (controlapi.FetchCycle, bool) {
-	for {
-		l.mu.Lock()
-		if n := len(l.cycles); n > 0 && !l.cycles[n-1].Start.Before(t) {
-			c := l.cycles[n-1]
-			l.mu.Unlock()
-			return c, true
-		}
-		if l.added == nil {
-			l.added = make(chan struct{})
-		}
-		added := l.added
-		l.mu.Unlock()
-		select {
-		case <-added:
-		case <-ctx.Done():
-			return controlapi.FetchCycle{}, false
-		}
-	}
 }
 
 var (
