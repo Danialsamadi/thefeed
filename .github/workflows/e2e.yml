@@ -1,0 +1,29 @@
+name: E2E
+
+# The opt-in end-to-end suite (e2e/, make e2e): installs this branch's
+# builds with scripts/install.sh on the runner, which has systemd and sudo,
+# and drives the admin panel's HTTPS API through it.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: End-to-end on systemd
+        run: make e2e
+      # The suite dumps the journal itself when a flow fails; this covers a
+      # timeout or crash that skips its cleanup.
+      - name: Journal on failure
+        if: failure()
+        run: sudo journalctl -u thefeed-server -u thefeed-admin --no-pager -n 300 || true
