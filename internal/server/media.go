@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
 )
 
@@ -487,22 +488,9 @@ func (c *MediaCache) sweepExpiredLocked(now time.Time) int {
 	return len(expired)
 }
 
-// MediaCacheStats is a snapshot of cache counters.
-type MediaCacheStats struct {
-	Entries int64 `json:"entries"`
-	// Bytes is the logical size of cached files, including relay-only ones
-	// whose content is NOT in memory. RAMBytes is the heap actually held —
-	// use that one when diagnosing memory.
-	Bytes         int64  `json:"bytes"`
-	RAMBytes      int64  `json:"ramBytes"`
-	Queries       uint64 `json:"queries"`
-	StoreHits     uint64 `json:"storeHits"`
-	StoreMisses   uint64 `json:"storeMisses"`
-	StoreRejected uint64 `json:"storeRejected"`
-	Evictions     uint64 `json:"evictions"`
-	MaxFileBytes  int64  `json:"maxFileBytes"`
-	TTLSeconds    int64  `json:"ttlSeconds"`
-}
+// MediaCacheStats is a snapshot of cache counters. It is part of the
+// control API, so it is defined there.
+type MediaCacheStats = controlapi.MediaCacheStats
 
 // Stats returns a snapshot of cache counters. Lock-free for the per-counter
 // fields; Entries and Bytes are also atomic.

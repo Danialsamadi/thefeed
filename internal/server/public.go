@@ -19,6 +19,14 @@ import (
 	"github.com/sartoopjj/thefeed/internal/protocol"
 )
 
+// telegramWebBases are the web views a PublicReader reads channels from, in
+// order. A variable so tests can point it at a fake.
+var telegramWebBases = []string{
+	"https://telegram.me/s",
+	"https://telegram.dog/s",
+	"https://t.me/s",
+}
+
 // PublicReader fetches recent posts from public Telegram channels via the web view.
 type PublicReader struct {
 	channels []string
@@ -72,12 +80,8 @@ func NewPublicReader(channelUsernames []string, feed *Feed, msgLimit int, baseCh
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		pageClient: newPageClient(),
-		baseURLs: []string{
-			"https://telegram.me/s",
-			"https://telegram.dog/s",
-			"https://t.me/s",
-		},
+		pageClient:    newPageClient(),
+		baseURLs:      append([]string(nil), telegramWebBases...),
 		cache:         make(map[string]cachedMessages),
 		cacheTTL:      10 * time.Minute,
 		fetchInterval: 10 * time.Minute,

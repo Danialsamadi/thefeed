@@ -69,6 +69,9 @@ func secret(s Setting) Setting { s.Secret = true; return s }
 var Settings = []Setting{
 	text("server.dataDir", "THEFEED_DATA_DIR", "data-dir", "", "./data", nil),
 	text("server.listen", "THEFEED_LISTEN", "listen", "", ":53", checkListen),
+	// The admin panel talks to the server through this socket, so the panel
+	// doesn't offer to turn it off.
+	onOff("server.controlSocket", "THEFEED_CONTROL_SOCKET", "control-socket", "", true),
 	text("dns.domain", "THEFEED_DOMAIN", "domain", "dns", "", checkDomain),
 	list("dns.extraDomains", "THEFEED_EXTRA_DOMAINS", "extra-domains", "dns", checkDomain),
 	secret(text("server.key", "THEFEED_KEY", "key", "", "", nil)),
