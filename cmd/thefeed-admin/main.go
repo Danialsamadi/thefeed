@@ -103,13 +103,7 @@ func main() {
 		if errors.Is(err, admin.ErrBusy) {
 			// ponytail: the running panel holds bbolt's lock; stopping it is
 			// the operator's one-liner rather than an IPC channel to it.
-			if admin.InContainer() {
-				log.Fatalf("thefeed-admin is running. Run this on the host instead:\n" +
-					"  docker stop thefeed-admin\n" +
-					"  docker run --rm -v /opt/thefeed:/opt/thefeed $(docker inspect -f '{{.Config.Image}}' thefeed-admin) reset-admin\n" +
-					"  docker start thefeed-admin")
-			}
-			log.Fatalf("thefeed-admin is running. Run this instead:\n  systemctl stop thefeed-admin && thefeed-admin reset-admin && systemctl start thefeed-admin")
+			log.Fatalf("thefeed-admin is running. Run this on the host instead:\n  %s", admin.ResetCommand())
 		}
 		if err != nil {
 			log.Fatalf("reset-admin: %v", err)

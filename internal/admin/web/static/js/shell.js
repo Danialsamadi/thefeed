@@ -106,11 +106,12 @@ const Panel = (() => {
   // ---------- sign-in ----------
   async function boot() {
     render();
+    const s = await api('GET', '/api/auth/setup'); // the sign-in page's reset line, for after a sign-out too
+    if (!s) return;
+    S.reset = s.data.reset;
     const r = await api('GET', '/api/auth/session');
     if (!r) return;
     if (r.ok) return signIn(r.data);
-    const s = await api('GET', '/api/auth/setup');
-    if (!s) return;
     S.auth = s.data.needed ? 'setup' : 'login';
     render();
     $('.auth input:not([disabled])')?.focus();
@@ -205,7 +206,7 @@ const Panel = (() => {
         ${formError('login')}
         <button class="btn full" type="submit" data-k="login-go"${formOff('login')}>${S.busy === 'login' ? 'Logging in…' : 'Log in'}</button>
       </form>
-      <p class="hint">Forgot the password? Reset it on the server with <code>thefeed-admin reset-admin</code>.</p></div>`;
+      <p class="hint">Forgot the password? Reset it with this on the server: <code>${esc(S.reset)}</code></p></div>`;
   }
 
   forms.setup = async () => {
