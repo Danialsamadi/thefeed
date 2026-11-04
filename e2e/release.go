@@ -1,9 +1,10 @@
 // Package e2e is the opt-in end-to-end suite for thefeed-server and its
 // admin panel, behind the e2e build tag. On a disposable Linux host with
-// systemd it installs locally built binaries with scripts/install.sh, drives
+// systemd and Docker it installs locally built binaries with
+// scripts/install.sh, or runs them with docker compose (E2E_SETUP), drives
 // the panel's HTTPS API through first run, restart, channels, answering,
 // stop and start, update and rollback, and the login lockout, then
-// uninstalls. Run it with `make e2e`; see the README, "End-to-end tests".
+// removes it all. Run it with `make e2e`; see the README, "End-to-end tests".
 package e2e
 
 import (

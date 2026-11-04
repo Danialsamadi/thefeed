@@ -456,24 +456,35 @@ Then open `ios/Thefeed.xcodeproj` in Xcode to run on a device.
 
 `make e2e` builds the server and admin panel, installs them on the machine it runs on with `scripts/install.sh --local build/e2e`, and drives the panel's HTTPS API. It covers first run, a restart, a live channel, stopping answers (checked with real DNS queries), stop and start, update and rollback from a local fake release, and the login lockout. Then it uninstalls everything. CI runs it on every pull request (`.github/workflows/e2e.yml`).
 
+`E2E_SETUP` picks how thefeed runs, and CI runs all three:
+
+- `script-docker` (the default): `install.sh` with the panel in Docker, its default answer;
+- `script-systemd`: `install.sh` with the panel as a systemd service;
+- `compose`: `docker-compose.yml` in a temporary directory, with the images pushed to a local registry on `localhost:5000`. Update and rollback change the server's image tag.
+
+For example: `make e2e E2E_SETUP=compose`.
+
 It's not part of `go test ./...`: it sits behind the `e2e` build tag. It needs:
 
 - Linux with systemd;
 - `sudo`;
-- port 443 and `127.0.0.1:5300` free;
-- no thefeed installed, or it refuses to run.
+- Docker with BuildKit, usable without `sudo` (`make e2e` builds the panel's image);
+- port 443 and `127.0.0.1:5300` free, and port 5000 for `compose`;
+- no thefeed installed or running in Docker, or it refuses to run.
 
 Use a throwaway VM or a container that runs systemd as PID 1, never a real server. For example, with [Multipass](https://multipass.run):
 
 ```bash
 multipass launch 24.04 --name thefeed-e2e --memory 2G --disk 10G
 multipass shell thefeed-e2e
-# inside the VM: install Go 1.26+ (https://go.dev/dl) and make, copy this
-# checkout in (git clone, or multipass transfer), then in it:
+# inside the VM: install Go 1.26+ (https://go.dev/dl), make, and Docker
+# (sudo apt install docker.io docker-buildx; sudo usermod -aG docker $USER,
+# then log in again), copy this checkout in (git clone, or multipass
+# transfer), then in it:
 make e2e
 ```
 
-A run cut short (Ctrl-C, a timeout) leaves the install behind, and the next run refuses to start. Clear it with `sudo bash scripts/install.sh --uninstall && sudo rm -rf /opt/thefeed`.
+A run cut short (Ctrl-C, a timeout) leaves the install behind, and the next run refuses to start. Clear it with `sudo bash scripts/install.sh --uninstall && sudo rm -rf /opt/thefeed`, and `docker rm -f thefeed-server thefeed-admin thefeed-e2e-registry`.
 
 ---
 
