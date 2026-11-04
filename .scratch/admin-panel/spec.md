@@ -24,6 +24,8 @@ Changing anything is error-prone:
 
 A web admin panel for one operator and one server. It runs on the same machine as a small companion service, separate from thefeed-server, so it keeps working while the server is stopped, restarting or being updated.
 
+The panel runs as a Docker container, or as a systemd service on a server without Docker. Either way it manages thefeed-server, whether the install script set that up as a systemd service or docker compose runs it as a container.
+
 The panel follows the approved mockup, "panel-v3" (see Further Notes):
 
 - **Sign-in:** one admin account, stored in the panel's own database. First run asks for a one-time setup code that the installer prints. There's a login screen, log out, and change password.
@@ -205,11 +207,22 @@ The UI works on a phone and on a desktop, in dark and light, in thefeed's own co
 92. As the operator, I want the panel to work without loading anything from third-party sites, so that it works on a censored network and leaks nothing.
 93. As a reader, I want the panel to store only counts and never anything that identifies me, so that running a panel doesn't put me at risk.
 
+### Running in Docker
+
+94. As the operator, I want to run the panel as a Docker container, so that it runs the same way on every server.
+95. As the operator installing with the script, I want to be asked whether to run the panel in Docker, with Docker installed for me when it's missing and my answer remembered, so that I choose once.
+96. As the operator running thefeed with docker compose, I want the panel to restart, stop and start the server container and set whether it starts with Docker, so that I don't need a shell.
+97. As the operator running thefeed with docker compose, I want the server container's log in the panel, split by feature like the journal, so that troubleshooting works the same.
+98. As the operator running thefeed with docker compose, I want Update and Rollback to change the server's image with the same health check and automatic rollback, and to stay in effect after the next `docker compose up -d`, so that compose doesn't undo them.
+99. As the operator running thefeed with docker compose, I want to be told which compose settings override `thefeed.env`, so that the panel's changes aren't silently ignored.
+100. As the operator, I want the panel's edits to leave every server file readable by the server, whatever user it runs as, so that a settings change never locks the server out of its own config.
+101. As the operator, I want the Service page to say whether it manages a service or a container, and to offer only the actions that work there, so that nothing on it fails by design.
+
 ## Implementation Decisions
 
 ### Shape
 
-- **New companion service, `thefeed-admin`.** It's its own binary and systemd unit on the same machine as thefeed-server. It must keep running while thefeed-server is stopped, restarting or updating, and be able to start it again, so it can't live inside thefeed-server.
+- **New companion service, `thefeed-admin`.** It's its own binary on the same machine as thefeed-server, run as a Docker container or a systemd unit (see "Running in Docker"). It must keep running while thefeed-server is stopped, restarting or updating, and be able to start it again, so it can't live inside thefeed-server.
 - **No build step.** It's one Go binary with the UI (HTML, CSS, vanilla JS) embedded, the same approach as the existing client web UI. It ships thefeed's tokens and icon set and bundles the Vazirmatn font, so nothing loads from third-party sites.
 - **Runs as root**, like thefeed-server does today. It has to:
   - manage a root-run systemd unit;
@@ -419,6 +432,46 @@ Every error carries a field and a human message, which the UI shows next to the 
 - At the end it prints the panel URL, the setup code and, when self-signed, the certificate fingerprint.
 - It writes every setting to `thefeed.env` and stops baking flags into the unit.
 - `--uninstall` removes the panel too.
+- It asks "Run the admin panel in Docker? [Y/n]" and saves the answer as `THEFEED_ADMIN_DOCKER` in `thefeed.env`, which is the default on the next run.
+  - **Yes** installs Docker from the OS packages when it's missing, then runs the panel container with `docker run` (see "Running in Docker"). `--local <dir>` loads the panel image from an archive in that directory instead of pulling it.
+  - **No** keeps the panel as the systemd unit above.
+  - Either way it prints the URL, setup code and fingerprint, reading the panel's log from `docker logs` or the journal.
+
+### Running in Docker
+
+- **Two settings say where the panel is.** Neither is detected; the panel's image and the compose file set them.
+  - `THEFEED_ADMIN_CONTAINER=1`, set by the panel's image: the panel runs inside a container, so it runs the host's `systemctl` and `journalctl` through `nsenter -t 1 -m -u -i -n -p --`.
+  - `THEFEED_ADMIN_SERVER`, `systemd` (the default) or `docker`: how thefeed-server runs. With `docker`, the container is named by `THEFEED_ADMIN_SERVER_CONTAINER`, default `thefeed-server`.
+- **The panel's own settings:** thefeed-admin reads `<data-dir>/thefeed.env` itself at start, as thefeed-server does, and the real environment wins. A container then needs no env file, and picks up a changed setting at its next start.
+- **The panel container is the same in both cases:**
+  - `privileged`, `pid: host` and `network_mode: host`. It's root on the host, as the systemd panel is.
+    - `pid: host` lets it find thefeed-server in `/proc`.
+    - The host network gives it the host's network counters, port 443 for browsers and Let's Encrypt, and the DNS self-test's way to the server.
+  - It mounts `/var/run/docker.sock`, plus `/opt/thefeed` and `/etc/systemd/system` at the same paths, so the binary swap and the unit-file code run unchanged.
+  - Its restart policy is `unless-stopped`.
+- **Docker Engine API:** `net/http` over the unix socket, with no Docker SDK. Calls used: container inspect, start, stop, restart and update (restart policy), logs, image pull, and container create and remove.
+- **thefeed-server as a container (`THEFEED_ADMIN_SERVER=docker`):**
+  - **Restart, stop and start** act on the container.
+  - **Start on boot** is the restart policy: `unless-stopped` for on, `no` for off.
+  - **Reboot and shutdown** act on the host through `nsenter`, as in a script install.
+  - **Logs:** the container's log through the API with `timestamps=1`, with the 8-byte stream frames split apart. The paging cursor is a timestamp. Feature matching and levels are as for the journal.
+  - **Shadowing:** environment variables and settings flags in the container's config beat `thefeed.env`. The page lists them and says to remove them from `docker-compose.yml`. There's no fix-unit in Docker mode.
+  - **Update:**
+    - The newest tag is looked up as before, from GitHub releases.
+    - The image is the container's current image repository with the new tag. The panel pulls it, then writes `THEFEED_SERVER_TAG=<tag>` into the compose project's `.env` (`/opt/thefeed/.env`).
+    - It recreates the container with the same config and the new image. The same 60-second health gate and automatic rollback apply.
+    - Writing the tag means a later `docker compose up -d` keeps the panel's version.
+  - **Rollback** recreates the container with the previous tag, which the panel remembers, and writes that tag back.
+  - **Image integrity:** the registry checks content digests, and `SHA256SUMS` applies only to binaries. Pinning digests is later hardening.
+- **Files keep their owner.** The panel writes files in the data directory: `thefeed.env`, the lists and the server key. Each keeps its owner and group as well as its mode. The server container runs as uid 1000, and a root-owned 0600 file would lock it out of its own config.
+- **Images:** the release workflow builds `ghcr.io/<owner>/thefeed-server` and `ghcr.io/<owner>/thefeed-admin` (owner lowercased) for amd64 and arm64, and pushes them tagged with the release and `latest`. Pull requests build both images without pushing.
+- **Compose file:** `docker-compose.yml` runs both services from those images.
+  - **thefeed-server** gets only its data volume (`./data:/data`) and the DNS port. It has no `env_file`, no `environment` and no settings flags, because the real environment beats `thefeed.env`.
+  - **Settings** live in `data/thefeed.env`, which has to set `THEFEED_LISTEN=:5300` and `THEFEED_CONTROL_SOCKET=true`.
+  - **The panel** mounts the compose directory at `/opt/thefeed`. Its data is then `/opt/thefeed/data`, and the panel's own data is `/opt/thefeed/admin`.
+  - **Image tags** come from `.env`: `THEFEED_SERVER_TAG` and `THEFEED_ADMIN_TAG`.
+- **reset-admin** in a container prints the Docker commands: stop the panel, run `reset-admin` in a one-off container, start it again.
+- **The panel's own update** stays with the installer, or `docker compose pull admin && docker compose up -d`.
 
 ## Testing Decisions
 
@@ -489,6 +542,27 @@ Tests build a real server in-process on a temporary data directory, and fake ups
 
 Prior art: `dns_multidomain_test`, `media_integration_test`, and `github_relay_test` with its `httptest` upstreams.
 
+### Seam 6: a fake Docker Engine API
+
+Tests drive the panel's JSON API (seam 1) with the real Docker adapter. The adapter talks to an `httptest` server on a unix socket that plays the Engine API:
+- container state;
+- start, stop and restart;
+- the restart policy;
+- logs as multiplexed frames;
+- image pull;
+- container create and remove.
+
+Tests check what the operator sees through the API and the calls the fake received. For example:
+- an update pulls the new tag, writes it to `.env`, and recreates the container with the same config;
+- a failed health gate recreates the container with the old tag.
+
+What it catches:
+- wrong requests;
+- frame parsing;
+- the order of update and rollback.
+
+What it misses: real Docker's quirks. The Docker setup of the end-to-end suite covers those.
+
 ### Shared registry and parsers
 
 Table tests prove that:
@@ -517,6 +591,11 @@ The suite installs locally built binaries with `install.sh`, then drives the pan
 
 Reboot and shutdown aren't exercised. Seam 1 covers the commands they send.
 
+The same flows run in three setups, each its own CI job:
+1. a script install with the panel in Docker, which is the installer's default answer;
+2. a script install with the panel as a systemd service;
+3. docker compose, with the server and the panel as containers. Update and rollback pull from a local registry (`registry:2`) that holds the server image at two tags.
+
 **Not tested automatically:** visual layout (covered by the mockup and manual review) and Let's Encrypt issuance (the e2e suite uses self-signed).
 
 ## Out of Scope
@@ -528,7 +607,8 @@ Reboot and shutdown aren't exercised. Seam 1 covers the commands they send.
 - Alerts and notifications (email, Telegram, push) when a feature goes down.
 - Exporting telemetry to external systems such as OpenObserve or Prometheus.
 - Managing more than one server.
-- Hosting on anything but Linux with systemd.
+- Hosting on anything but Linux. thefeed-server runs under systemd or as a Docker container, and the panel runs as a Docker container or under systemd. Kubernetes, Podman and Docker Swarm are out.
+- Running thefeed-server in Docker without compose. The panel recreates a container it didn't create only through compose's `.env` tag.
 - Reaching the panel over the DNS tunnel. On a network where HTTPS to the server is blocked, use localhost-only mode through an SSH tunnel.
 
 ## Further Notes
@@ -552,6 +632,11 @@ Reboot and shutdown aren't exercised. Seam 1 covers the commands they send.
   - the retention periods;
   - the update checksum requirement and auto-rollback;
   - making `thefeed.env` the single source and removing flags from the unit.
+- **Confirmed by the operator on 2026-11-04:**
+  - The panel runs as a Docker container and controls thefeed-server, as a systemd service or as a container.
+  - The installer asks whether to run the panel in Docker, with Yes as the default. No keeps the systemd panel.
+  - In Docker mode, the panel writes the server's image tag to compose's `.env`, so `docker compose up -d` keeps an update or rollback.
+  - Test seam 6 (a fake Docker Engine API) and the Docker setups of the end-to-end suite.
 - **Fork:**
   - This repo is a fork, and the installer currently downloads upstream releases (`sartoopjj/thefeed`).
   - The panel's configurable release source and the release workflow's new `SHA256SUMS` have to be in place before panel updates can work for the fork.
