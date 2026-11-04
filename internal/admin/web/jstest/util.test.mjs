@@ -91,5 +91,15 @@ check('later pages slot into their group', names(groupSections([
 check('an unknown group goes last', names(groupSections([{ group: 'Extras', id: 'x' }, { group: 'This panel', id: 'acct' }], ORDER)),
   [['This panel', ['acct']], ['Extras', ['x']]]);
 
+// ===== upFor: "Up 3 days" on Service and power =====
+const up = new Date(2026, 9, 22, 7, 58);
+check('just started', upFor(up, new Date(2026, 9, 22, 7, 58, 40)), 'under a minute');
+check('one minute', upFor(up, new Date(2026, 9, 22, 7, 59, 30)), '1 minute');
+check('minutes', upFor(up, new Date(2026, 9, 22, 8, 57)), '59 minutes');
+check('an hour', upFor(up, new Date(2026, 9, 22, 8, 58)), '1 hour');
+check('hours, rounded down', upFor(up, new Date(2026, 9, 23, 7, 57)), '23 hours');
+check('a day', upFor(up, new Date(2026, 9, 23, 7, 58)), '1 day');
+check('days', upFor('2026-10-22T07:58:00Z', new Date('2026-11-04T12:04:00Z')), '13 days');
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
