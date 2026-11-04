@@ -1,5 +1,5 @@
 // Package dockerapi is a small client for the Docker Engine API: net/http
-// over the Engine's unix socket, with the API version pinned in the path.
+// over the Engine's unix socket, in the Engine's own API version.
 // It makes only the calls the panel needs: container inspect, start, stop,
 // restart, update, create and remove, and image pull.
 //
@@ -20,12 +20,14 @@ import (
 	"time"
 )
 
-// version is the Engine API version the client speaks. v1.44 is Engine
-// 25.0; Engine 29.0 to 29.2 refuse anything older.
+// version is empty: an unversioned path speaks the Engine's own API version.
+// No one version works everywhere: Engine 29 refuses anything before v1.44,
+// and Engines before 25.0 (Ubuntu 22.04's and Debian 12's docker.io) refuse
+// v1.44. The client reads only fields every version since v1.41 has, and
+// drops the short-ID alias that v1.44 and later add.
 //
-// ponytail: pinned; negotiate with GET /version if an Engine past 1.44's
-// support window ever turns it away.
-const version = "/v1.44"
+// ponytail: unversioned; negotiate with GET /version if a field ever changes.
+const version = ""
 
 // Client talks to one Docker Engine.
 type Client struct{ hc *http.Client }
@@ -123,7 +125,7 @@ func (c *Client) Create(ctx context.Context, like *Container, image string) erro
 	body["Image"] = image
 	delete(body, "Hostname")
 	body["HostConfig"] = old.HostConfig
-	// API v1.44 lists the container's short ID among its aliases; the new
+	// From API v1.44 the container's short ID is among its aliases; the new
 	// container gets its own.
 	short := like.ID[:min(12, len(like.ID))]
 	eps := map[string]any{}

@@ -126,7 +126,7 @@ func (e *engine) handler() http.Handler {
 	// checks the Engine makes.
 	container := func(fn func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			call := r.Method + " " + strings.TrimPrefix(r.URL.Path, "/v1.44")
+			call := r.Method + " " + r.URL.Path
 			if q, _ := url.QueryUnescape(r.URL.RawQuery); q != "" {
 				call += "?" + q
 			}
@@ -148,10 +148,10 @@ func (e *engine) handler() http.Handler {
 			fn(w, r)
 		}
 	}
-	mux.HandleFunc("GET /v1.44/containers/{name}/json", container(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /containers/{name}/json", container(func(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, e.c)
 	}))
-	mux.HandleFunc("POST /v1.44/containers/{name}/start", container(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /containers/{name}/start", container(func(w http.ResponseWriter, r *http.Request) {
 		if e.running() {
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -159,7 +159,7 @@ func (e *engine) handler() http.Handler {
 		e.start()
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	mux.HandleFunc("POST /v1.44/containers/{name}/stop", container(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /containers/{name}/stop", container(func(w http.ResponseWriter, r *http.Request) {
 		if !e.running() {
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -167,11 +167,11 @@ func (e *engine) handler() http.Handler {
 		e.stop()
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	mux.HandleFunc("POST /v1.44/containers/{name}/restart", container(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /containers/{name}/restart", container(func(w http.ResponseWriter, r *http.Request) {
 		e.start()
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	mux.HandleFunc("POST /v1.44/containers/{name}/update", container(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /containers/{name}/update", container(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			msg(w, http.StatusBadRequest, err.Error())
@@ -180,7 +180,7 @@ func (e *engine) handler() http.Handler {
 		e.c["HostConfig"].(map[string]any)["RestartPolicy"] = body["RestartPolicy"]
 		reply(w, http.StatusOK, map[string]any{"Warnings": []string{}})
 	}))
-	mux.HandleFunc("DELETE /v1.44/containers/{name}", container(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("DELETE /containers/{name}", container(func(w http.ResponseWriter, r *http.Request) {
 		if e.running() {
 			msg(w, http.StatusConflict, `cannot remove container "/thefeed-server": container is running: stop the container before removing or force remove`)
 			return
@@ -189,7 +189,7 @@ func (e *engine) handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	// Pulling answers 200 and streams its progress; a failure is in the stream.
-	mux.HandleFunc("POST /v1.44/images/create", container(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /images/create", container(func(w http.ResponseWriter, r *http.Request) {
 		ref := r.URL.Query().Get("fromImage") + ":" + r.URL.Query().Get("tag")
 		w.Header().Set("Content-Type", "application/json")
 		if _, ok := e.registry[ref]; !ok {
@@ -200,7 +200,7 @@ func (e *engine) handler() http.Handler {
 		e.images[ref] = true
 		io.WriteString(w, `{"status":"Pulling from sartoopjj/thefeed-server"}`+"\n"+`{"status":"Status: Downloaded newer image for `+ref+`"}`+"\n")
 	}))
-	mux.HandleFunc("POST /v1.44/containers/create", container(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /containers/create", container(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			msg(w, http.StatusBadRequest, err.Error())
