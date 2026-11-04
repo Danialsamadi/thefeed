@@ -130,7 +130,7 @@ const Ctl = (() => {
     if (id === 'private' && !C.st.telegram.loggedIn) {
       return setting('fetch.noTelegram').waiting ? ['Stops updating after a restart: the Telegram login is logged out', 'bad'] : ['Not updating: the Telegram login is logged out', 'bad'];
     }
-    if (it.waiting) return [{ private: 'Joins after a restart', x: 'Fetched after a restart', instances: 'Tried after a restart' }[id]];
+    if (it.waiting) return [{ channels: 'Fetched after a restart', private: 'Joins after a restart', x: 'Fetched after a restart', instances: 'Tried after a restart' }[id]];
     if (id === 'private') return ['Joined'];
     if (id === 'x' && Panel.feature?.('x')?.status === 'down') return ['Paused: no Nitter instance answers', 'bad'];
     return [''];

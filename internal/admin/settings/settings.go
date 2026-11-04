@@ -3,10 +3,10 @@
 // server reads at start (thefeed.env and the list files), through
 // internal/serverconfig.
 //
-// A change "waits" when the saved value differs from the one the running
-// server reports in /status. Public channels are the exception: after
-// writing channels.txt the panel asks the server to reload it, so they
-// apply live.
+// A change "waits" when the saved value or list differs from the one the
+// running server reports in /status. Public channels apply live: after
+// writing channels.txt the panel asks the server to reload it, and they
+// wait only when that fails.
 //
 // # API
 //
@@ -67,11 +67,7 @@ func Module(d *admin.Deps) error {
 // New is the settings module talking to c and dns.
 func New(c controlapi.Client, dns DNS) admin.Module {
 	return func(d *admin.Deps) error {
-		ran, err := d.Bucket("settings.running")
-		if err != nil {
-			return err
-		}
-		m := &module{d: d, c: c, dns: dns, ran: ran}
+		m := &module{d: d, c: c, dns: dns}
 		d.Handle("GET /api/settings", m.handleGet)
 		d.Handle("PATCH /api/settings/{key}", m.handlePatch)
 		d.Handle("POST /api/settings/discard", m.handleDiscard)
@@ -88,18 +84,17 @@ type module struct {
 	d   *admin.Deps
 	c   controlapi.Client
 	dns DNS
-	ran *admin.Bucket // list files as the running server read them; see loadList
 }
 
 func (m *module) path(name string) string { return filepath.Join(m.d.ServerDataDir, name) }
 
 // files is what's on disk, read once per request.
 type files struct {
-	env     *serverconfig.Env
-	envHash string
-	lists   map[string]*listFile
-	running map[string]string // nil when the server doesn't answer
-	started time.Time         // when the running server started
+	env      *serverconfig.Env
+	envHash  string
+	lists    map[string]*listFile
+	running  map[string]string // nil when the server doesn't answer
+	runLists controlapi.Lists
 }
 
 func (m *module) load(ctx context.Context) (*files, error) {
@@ -111,7 +106,7 @@ func (m *module) load(ctx context.Context) (*files, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if st, err := m.c.Status(ctx); err == nil {
-		f.running, f.started = st.Server.Config, st.Server.Started
+		f.running, f.runLists = st.Server.Config, st.Lists
 	}
 	for _, src := range sources {
 		if f.lists[src.id], err = m.loadList(f, src); err != nil {
@@ -275,8 +270,8 @@ func (m *module) view(f *files) stateView {
 		}
 		v.Settings = append(v.Settings, sv)
 	}
-	// The instances are a setting, counted above; public channels never wait.
-	for _, id := range []string{"private", "x"} {
+	// The instances are a setting, counted above.
+	for _, id := range []string{"channels", "private", "x"} {
 		if v.Lists[id].Waiting {
 			v.Waiting++
 		}
@@ -405,7 +400,7 @@ func (m *module) handleDiscard(w http.ResponseWriter, r *http.Request) {
 	}
 	var back []*listFile
 	for _, l := range f.lists {
-		if l.path != "" && l.waiting(f) && l.snap != nil {
+		if l.path != "" && l.waiting() {
 			back = append(back, l)
 			stale = stale || req.Base[l.src.id] != l.hash
 		}
@@ -421,7 +416,8 @@ func (m *module) handleDiscard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, l := range back {
-		if err := serverconfig.WriteFile(l.path, []byte(l.snap.Content), req.Base[l.src.id]); err != nil {
+		l.list.Items = l.running()
+		if err := serverconfig.WriteFile(l.path, l.list.Bytes(), req.Base[l.src.id]); err != nil {
 			m.writeFailed(w, err)
 			return
 		}
