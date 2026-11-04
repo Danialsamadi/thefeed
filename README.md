@@ -110,34 +110,43 @@ sudo bash -c "$(curl -Ls https://raw.githubusercontent.com/sartoopjj/thefeed/mai
 
 #### Option B — Docker
 
-No Go toolchain needed. Base image `alpine:3.21` (~23 MB), runs as non-root `thefeed` (UID 1000).
+No Go toolchain needed. Two containers from prebuilt images (amd64 and arm64): `thefeed-server`, which runs as non-root UID 1000, and `thefeed-admin`, the web panel.
+
+Two files configure it:
+
+- **`.env`** (from `.env.example`): which images and tags compose runs. The panel writes the server's tag here when it updates or rolls back.
+- **`data/thefeed.env`** (from `configs/thefeed.env.example`): every setting. The server and the panel read it themselves, and the panel edits it. Keep `THEFEED_LISTEN=:5300` and `THEFEED_CONTROL_SOCKET=true` in it.
 
 ```bash
-# 1. Configure — set THEFEED_DOMAIN and THEFEED_KEY (uncomment Telegram vars if you need private channels)
-cp .env.example .env && nano .env
+# 1. Get the compose file and the examples
+git clone https://github.com/sartoopjj/thefeed /opt/thefeed && cd /opt/thefeed
 
-# 2. Add your channels
-mkdir -p data
+# 2. Configure: set THEFEED_DOMAIN and THEFEED_KEY
+cp .env.example .env
+mkdir -p data && cp configs/thefeed.env.example data/thefeed.env && nano data/thefeed.env
+
+# 3. Add your channels; the server must own its data
 cp configs/channels.txt data/
 cp configs/x_accounts.txt data/   # optional
+sudo chown -R 1000:1000 data
 
-# 3. Build and run (listens on :5300/udp inside the container)
+# 4. Run, and get the panel's address and one-time setup code
 docker compose up -d
-docker compose logs -f
-
-# 4. Print the client import config (the thefeed:// URI — domain, key, server key sk=,
-#    resolvers) to hand to your users, just like the script prints at the end:
-docker compose run --rm server --print-config --data-dir /data --domain YOUR_DOMAIN --key YOUR_KEY
+docker logs thefeed-admin
 ```
 
-Then set up the [port 53 redirect](#port-53) below. For private channels, do a one-time interactive login first:
+The panel is at `https://<your server>/` on port 443, with a self-signed certificate unless you set `THEFEED_ADMIN_HOSTNAME` in `data/thefeed.env`. Open it, enter the setup code, and create the admin account. From there it edits settings and channels, restarts, updates and rolls back the server container, and shows its logs. It also shows the client import link, or print it with `docker compose run --rm server --data-dir /data --print-config`.
+
+Don't give the server `environment:`, `env_file:` or settings flags in `docker-compose.yml`: they beat `thefeed.env`, and the panel's changes would be ignored.
+
+Then set up the [port 53 redirect](#port-53) below. For private channels, put `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` and `TELEGRAM_PHONE` in `data/thefeed.env`, set `THEFEED_NO_TELEGRAM=false`, then log in once and restart:
 
 ```bash
-docker compose run -it --rm server --login-only --data-dir /data \
-  --domain YOUR_DOMAIN --key YOUR_KEY \
-  --api-id YOUR_API_ID --api-hash YOUR_HASH --phone YOUR_PHONE
-# then remove --no-telegram from docker-compose.yml, add the Telegram flags, and `docker compose up -d`
+docker compose run -it --rm server --data-dir /data --login-only
+docker compose restart server
 ```
+
+Update the panel with `docker compose pull admin && docker compose up -d`. To build the images from source instead, uncomment the `build:` lines in `docker-compose.yml` and run `docker compose up -d --build`.
 
 ### Port 53
 

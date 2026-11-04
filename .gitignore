@@ -17,6 +17,8 @@ Thumbs.db
 # Data directories
 thefeeddata/
 data/
+# The admin panel's own data next to data/ (docker compose): its DB and TLS key
+/admin/
 
 # Session data
 session.json

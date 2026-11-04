@@ -57,6 +57,25 @@ func (e *Env) Get(key string) (value string, ok bool) {
 	return value, ok
 }
 
+// Setenv puts the file's variables into the process environment, except
+// one the real environment already has, even empty: that one wins, as it
+// does for thefeed-server. A key set twice gets its last value, as in Get.
+func (e *Env) Setenv() {
+	real := map[string]bool{}
+	for _, line := range e.lines {
+		k, v, ok := envLine(line)
+		if !ok || k == "" {
+			continue
+		}
+		if _, seen := real[k]; !seen {
+			_, real[k] = os.LookupEnv(k)
+		}
+		if !real[k] {
+			_ = os.Setenv(k, v)
+		}
+	}
+}
+
 // Set changes every line that sets key, keeping an "export " prefix and
 // quotes, or appends KEY=value at the end. Every reader of the file then
 // sees the same value.

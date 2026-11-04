@@ -1,16 +1,15 @@
 # ============================================================
 # thefeed-server — Multi-stage Docker build
 # ============================================================
-# Build:  docker compose build
-# Run:    docker compose up -d
-# Login:  docker compose run -it --rm server --login-only \
-#           --data-dir /data --domain $THEFEED_DOMAIN \
-#           --key $THEFEED_KEY --api-id $TELEGRAM_API_ID \
-#           --api-hash $TELEGRAM_API_HASH --phone $TELEGRAM_PHONE
+# Run:    docker compose up -d   (see docker-compose.yml)
+# Login:  docker compose run -it --rm server --data-dir /data --login-only
+# Settings come from /data/thefeed.env, which the server reads itself.
 # ============================================================
 
 # ---- Stage 1: Build ----
-FROM golang:1.26-alpine AS builder
+# On the build machine's platform: Go cross-compiles, so a multi-arch build
+# doesn't compile under emulation.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -24,8 +23,10 @@ COPY . .
 ARG VERSION=docker
 ARG COMMIT=unknown
 ARG DATE=unknown
+ARG TARGETOS
+ARG TARGETARCH
 
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
     -ldflags="-s -w \
       -X github.com/sartoopjj/thefeed/internal/version.Version=${VERSION} \
       -X github.com/sartoopjj/thefeed/internal/version.Commit=${COMMIT} \
@@ -55,4 +56,6 @@ USER thefeed
 WORKDIR /data
 
 ENTRYPOINT ["thefeed-server"]
-CMD ["--data-dir", "/data", "--listen", ":5300"]
+# No settings flags: they'd beat thefeed.env, and the admin panel's changes
+# would be ignored. THEFEED_LISTEN=:5300 goes in /data/thefeed.env.
+CMD ["--data-dir", "/data"]

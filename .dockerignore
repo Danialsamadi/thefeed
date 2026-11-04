@@ -17,6 +17,7 @@ Thumbs.db
 
 # Data (user-specific, mounted as volume)
 data/
+admin/
 thefeeddata/
 .thefeed/
 
