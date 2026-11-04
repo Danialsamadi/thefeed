@@ -390,7 +390,7 @@ func (c *ctlServer) raw(t *testing.T, method, path, body string) (int, string) {
 // check runs a feature's check through the panel's client.
 func (c *ctlServer) check(t *testing.T, feature string) *controlapi.CheckResult {
 	t.Helper()
-	res, err := c.api.(controlapi.Checker).Check(context.Background(), feature)
+	res, err := c.api.Check(context.Background(), feature)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +587,7 @@ func TestCtlChannels(t *testing.T) {
 func TestCtlCheckOff(t *testing.T) {
 	c := startCtl(t, nil)
 	for feature, want := range map[string]string{"feed": "404", "dnsm": "404", "nope": "404", "gh": "409 Conflict: gh is off"} {
-		if _, err := c.api.(controlapi.Checker).Check(context.Background(), feature); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := c.api.Check(context.Background(), feature); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("check %s: error %v, want one with %q", feature, err, want)
 		}
 	}

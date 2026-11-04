@@ -177,13 +177,6 @@ type CheckResult struct {
 	Detail  string `json:"detail"`  // each instance or data centre, as logged
 }
 
-// Checker runs a feature's check. The Client from New is a Checker too.
-type Checker interface {
-	Check(ctx context.Context, feature string) (*CheckResult, error)
-}
-
-var _ Checker = (*client)(nil)
-
 // Client is what the admin panel needs from the running server. New returns
 // the real one; the panel's tests fake it.
 type Client interface {
@@ -191,6 +184,7 @@ type Client interface {
 	ReloadChannels(ctx context.Context) error
 	Refresh(ctx context.Context) error
 	SetAnswering(ctx context.Context, on bool) error
+	Check(ctx context.Context, feature string) (*CheckResult, error)
 }
 
 // New returns a Client for the control socket at socketPath.

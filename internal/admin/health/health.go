@@ -77,15 +77,15 @@ type SelfTest interface {
 	Query(ctx context.Context, listen, domain string) (time.Duration, error)
 }
 
-// New is the health module reading the server through c and ck, and
-// testing the feed with dns.
-func New(c controlapi.Client, ck controlapi.Checker, dns SelfTest) admin.Module {
+// New is the health module reading the server through c, and testing the
+// feed with dns.
+func New(c controlapi.Client, dns SelfTest) admin.Module {
 	return func(d *admin.Deps) error {
 		db, err := d.Bucket("health")
 		if err != nil {
 			return err
 		}
-		h := &health{c: c, ck: ck, dns: dns, clock: d.Clock, db: db, checked: map[string]*checkResult{}}
+		h := &health{c: c, dns: dns, clock: d.Clock, db: db, checked: map[string]*checkResult{}}
 		d.Handle("GET /api/board", h.handleBoard)
 		d.Handle("GET /api/features/{feature}", h.handleFeature)
 		d.Handle("POST /api/checks/{feature}", h.handleCheck)
@@ -111,7 +111,6 @@ func New(c controlapi.Client, ck controlapi.Checker, dns SelfTest) admin.Module 
 
 type health struct {
 	c     controlapi.Client
-	ck    controlapi.Checker
 	dns   SelfTest
 	clock admin.Clock
 	db    *admin.Bucket
@@ -379,7 +378,7 @@ func (h *health) handleCheck(w http.ResponseWriter, r *http.Request) {
 		res.Pending, res.Summary = true, "Fetching…"
 	default:
 		var cr *controlapi.CheckResult
-		if cr, err = h.ck.Check(ctx, id); err == nil {
+		if cr, err = h.c.Check(ctx, id); err == nil {
 			res.OK, res.Summary, res.Detail = cr.OK, cr.Summary, cr.Detail
 		}
 	}
