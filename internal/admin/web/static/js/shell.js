@@ -257,21 +257,21 @@ const Panel = (() => {
 
   // ---------- the app ----------
   function renderNav() {
-    const n = (S.conn === 'live' && views.board?.count?.()) || 0;
+    const n = (S.conn === 'live' && views.board.count?.()) || 0;
     $('.nav').innerHTML = NAV.map(([v, label]) => `<button type="button" data-act="view" data-v="${v}" data-k="nav-${v}"${S.view === v ? ' aria-current="page"' : ''}>${I[v]}<span>${label}</span>${v === 'board' && n
       ? `<span class="count" aria-hidden="true">${n}</span><span class="sr">, ${plural(n, 'feature needs', 'features need')} attention</span>` : ''}</button>`).join('');
   }
   function renderBoard() {
-    const v = views.board, body = v ? v.render() : '<div class="state"><b>The Board isn\'t in this version yet</b><span>Each feature\'s status and uptime will show here.</span></div>';
+    const v = views.board, body = v.render();
     const flash = S.flash ? `<div class="notice" role="status"><span>${esc(S.flash)}</span></div>` : '';
-    $('.v-board .list-pane .scroll').innerHTML = head('Board', 'board', !!v, body == null) + flash + (body ?? loading(v.loading));
-    const d = v && S.open.board != null && v.detail(S.open.board);
+    $('.v-board .list-pane .scroll').innerHTML = head('Board', 'board', true, body == null) + flash + (body ?? loading(v.loading));
+    const d = S.open.board != null && v.detail(S.open.board);
     $('.v-board .thread-pane .scroll').innerHTML = d ? detailHead('board', d.title, d.sub, 'Back to the board', banner('feature')) + d.html
       : body == null ? '' : '<div class="state"><b>Pick a feature</b><span>Its status, uptime, dependencies, incidents and log open here.</span></div>';
   }
   function renderServer() {
-    const v = views.server, body = v ? v.render() : '<div class="state"><b>The Server page isn\'t in this version yet</b><span>CPU, memory, disk and network will show here.</span></div>';
-    $('.v-server .scroll').innerHTML = head('Server', 'server', !!v, body == null) + (body ?? loading(v.loading));
+    const v = views.server, body = v.render();
+    $('.v-server .scroll').innerHTML = head('Server', 'server', true, body == null) + (body ?? loading(v.loading));
   }
   function renderControl() {
     $('.v-control .list-pane .scroll').innerHTML = head('Control', 'control') + groupSections(sections, GROUPS).map(([g, ss]) => sec(g, ss.map(s => {

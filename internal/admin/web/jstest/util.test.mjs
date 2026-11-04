@@ -112,6 +112,10 @@ check('unit: start on boot', [svcWords(unitSvc).boot, svcWords(unitSvc).bootOn],
 check('container: start with Docker', [svcWords(dockerSvc).boot, svcWords(dockerSvc).bootOn], ['Start with Docker', 'Docker starts it after a reboot, unless you stopped it.']);
 check('unit: flags shadow thefeed.env', [svcWords(unitSvc).shadow, svcWords(unitSvc).shadowWhy], ['Settings passed as flags',
   "thefeed-server's systemd unit passes these, and a flag beats thefeed.env, so changes made here to them don't apply."]);
+check('unit: update and roll back', [svcWords(unitSvc).update, svcWords(unitSvc).updating, svcWords(unitSvc).rollback],
+  ['Downloads the release, then restarts.', 'downloading, then restarting', 'Installs it again, then restarts.']);
+check('container: update and roll back', [svcWords(dockerSvc).update, svcWords(dockerSvc).updating, svcWords(dockerSvc).rollback],
+  ['Pulls its image, then recreates the container on it.', 'pulling the image, then recreating the container', 'Pulls its image again, then recreates the container on it.']);
 check('container: remove them from compose', [svcWords(dockerSvc).shadow, svcWords(dockerSvc).shadowWhy], ['Settings in docker-compose.yml',
   "thefeed-server's container gets these from docker-compose.yml, and they beat thefeed.env, so changes made here to them don't apply. Remove them from docker-compose.yml, then run <code>docker compose up -d</code>."]);
 

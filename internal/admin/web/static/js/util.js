@@ -76,6 +76,9 @@ function svcWords(svc) {
     shadowWhy: docker
       ? "thefeed-server's container gets these from docker-compose.yml, and they beat thefeed.env, so changes made here to them don't apply. Remove them from docker-compose.yml, then run <code>docker compose up -d</code>."
       : "thefeed-server's systemd unit passes these, and a flag beats thefeed.env, so changes made here to them don't apply.",
+    update: docker ? 'Pulls its image, then recreates the container on it.' : 'Downloads the release, then restarts.',
+    updating: docker ? 'pulling the image, then recreating the container' : 'downloading, then restarting',
+    rollback: docker ? 'Pulls its image again, then recreates the container on it.' : 'Installs it again, then restarts.',
   };
 }
 

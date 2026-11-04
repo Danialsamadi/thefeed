@@ -19,8 +19,8 @@
 
   // Each action's confirm: q, why and go; danger tints it red, typed asks for
   // the domain. Without q it runs at once. busy is the status line meanwhile.
-  const C = a => ({
-    pause: { q: 'Stop answering queries?', why: 'The server stays up but goes silent: readers get no answers and Telegram tunnels close. Resume any time.', go: 'Stop answering', busy: 'Stopping answers…' },
+  const C = (a, w = svcWords(svc ?? {})) => ({
+    pause: { q: 'Stop answering queries?', why: 'The server stays up but goes silent: readers get no answers and Telegram tunnels close. Resume any time; a restart always comes back answering.', go: 'Stop answering', busy: 'Stopping answers…' },
     resume: { busy: 'Resuming…' },
     restart: { q: 'Restart thefeed-server now?', why: 'Readers lose about 10 seconds of queries. Open Telegram tunnels reconnect on their own.', go: 'Restart now', busy: 'Restarting…' },
     stop: { q: 'Stop thefeed-server?', why: 'Everything stops: feed, messenger, tunnels and relays. This panel keeps running so you can start it again.', go: 'Stop server', danger: true, busy: 'Stopping…' },
@@ -29,9 +29,9 @@
     'boot-off': { busy: 'Turning start on boot off…' },
     reboot: { q: 'Reboot the machine?', why: 'Readers get no answers for about a minute. This panel reconnects when the machine is back.', go: 'Reboot', busy: 'Rebooting the machine…' },
     shutdown: { q: 'Shut down the machine?', why: "Everything stops, this panel too. Only your hosting provider's console can turn it on again.", go: 'Shut down', danger: true, typed: true, busy: 'Shutting down…' },
-    update: { q: `Update to ${svc?.latest} now?`, why: 'Downloads the release, then restarts. Readers lose about 10 seconds of queries. You can roll back afterwards.', go: 'Update now',
-      busy: `Updating to ${svc?.latest}: downloading, then restarting…` },
-    rollback: { q: 'Roll back to the previous version?', why: 'Installs it again, then restarts. Readers lose about 10 seconds of queries.', go: 'Roll back', busy: `Rolling back to ${svc?.previous}…` },
+    update: { q: `Update to ${svc?.latest} now?`, why: `${w.update} Readers lose about 10 seconds of queries. You can roll back afterwards.`, go: 'Update now',
+      busy: `Updating to ${svc?.latest}: ${w.updating}…` },
+    rollback: { q: 'Roll back to the previous version?', why: `${w.rollback} Readers lose about 10 seconds of queries.`, go: 'Roll back', busy: `Rolling back to ${svc?.previous}…` },
     'fix-unit': { q: 'Move these flags into thefeed.env and restart?', why: 'Readers lose about 10 seconds of queries. The old unit is kept as thefeed-server.service.bak in the data directory.',
       go: 'Move and restart', busy: 'Moving the flags, then restarting…' },
   }[a]);
