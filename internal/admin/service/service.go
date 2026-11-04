@@ -33,6 +33,33 @@
 // download without a matching SHA256SUMS line installs nothing. The
 // installed binary is kept as <binary>.previous. No version older than
 // v0.40.1-rc0 is installed, by update or by rollback.
+//
+// # Docker mode
+//
+// With THEFEED_ADMIN_SERVER=docker, thefeed-server is the container
+// THEFEED_ADMIN_SERVER_CONTAINER (default thefeed-server) that docker
+// compose runs, managed through the Docker Engine API on
+// /var/run/docker.sock:
+//
+//	state                            the container's: running or not, started at State.StartedAt
+//	restart, stop, start             the container's
+//	boot-on, boot-off                its restart policy: unless-stopped or no
+//	reboot, shutdown                 systemctl, as in systemd mode
+//	update {version}                 pull the image's repository at that tag, write THEFEED_SERVER_TAG
+//	                                 into compose's .env (THEFEED_ADMIN_COMPOSE_ENV, default
+//	                                 /opt/thefeed/.env), recreate the container on it, and put the
+//	                                 old image and .env back if it isn't healthy in 60 s
+//	rollback                         pull the previous version's tag, write it into .env, recreate
+//	fix-unit                         400: the settings in shadowing are removed from docker-compose.yml
+//
+// Shadowing lists the container's environment variables, such as
+// THEFEED_DOMAIN, and command flags, such as --listen, that beat
+// thefeed.env.
+//
+// State says which mode it is, for the page to draw only the actions that
+// work there: "server" is systemd or docker, "name" the unit or container,
+// and "fixUnit" whether fix-unit is on offer, which is only in systemd
+// mode. Every other action works in both.
 package service
 
 import (
@@ -43,6 +70,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -50,6 +78,7 @@ import (
 	"time"
 
 	"github.com/sartoopjj/thefeed/internal/admin"
+	"github.com/sartoopjj/thefeed/internal/admin/dockerapi"
 	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/serverconfig"
 	"github.com/sartoopjj/thefeed/internal/update"
@@ -100,6 +129,12 @@ type Options struct {
 	Sleep    func(context.Context, time.Duration) // nil: time passes
 	Binary   string                               // thefeed-server; default: next to the data directory, as install.sh puts it
 	Unit     string                               // its unit file; default /etc/systemd/system/thefeed-server.service
+
+	// Docker, when set, runs thefeed-server as a container (Docker mode).
+	// nil: /var/run/docker.sock if THEFEED_ADMIN_SERVER is docker, else systemd.
+	Docker     *dockerapi.Client
+	Container  string // the container; default THEFEED_ADMIN_SERVER_CONTAINER, else thefeed-server
+	ComposeEnv string // compose's .env; default THEFEED_ADMIN_COMPOSE_ENV, else /opt/thefeed/.env
 }
 
 // Module is the service module on the real machine.
@@ -140,7 +175,12 @@ type State struct {
 	Last     *Line  `json:"last,omitempty"`
 	// Shadowing lists the flags thefeed-server's unit passes that beat
 	// thefeed.env, such as "--domain"; fix-unit moves them into the file.
+	// In Docker mode, it's the container's variables and flags.
 	Shadowing []string `json:"shadowing"`
+
+	Server  string `json:"server"`  // systemd or docker
+	Name    string `json:"name"`    // the unit or container
+	FixUnit bool   `json:"fixUnit"` // fix-unit is on offer: systemd only
 }
 
 type mod struct {
@@ -168,6 +208,15 @@ func New(o Options) admin.Module {
 		}
 		o.Binary = cmp.Or(o.Binary, filepath.Join(filepath.Dir(filepath.Clean(d.ServerDataDir)), "thefeed-server"))
 		o.Unit = cmp.Or(o.Unit, "/etc/systemd/system/thefeed-server.service")
+		switch v := os.Getenv("THEFEED_ADMIN_SERVER"); {
+		case o.Docker != nil, v == "", v == "systemd":
+		case v == "docker":
+			o.Docker = dockerapi.New("/var/run/docker.sock")
+		default:
+			return fmt.Errorf("THEFEED_ADMIN_SERVER is %q; want systemd or docker", v)
+		}
+		o.Container = cmp.Or(o.Container, os.Getenv("THEFEED_ADMIN_SERVER_CONTAINER"), unit)
+		o.ComposeEnv = cmp.Or(o.ComposeEnv, os.Getenv("THEFEED_ADMIN_COMPOSE_ENV"), "/opt/thefeed/.env")
 		if o.Sleep == nil {
 			o.Sleep = func(ctx context.Context, d time.Duration) {
 				select {
@@ -204,16 +253,22 @@ func (m *mod) edit(fn func(*saved)) error {
 
 func (m *mod) state(ctx context.Context) (State, error) {
 	sv := m.load()
-	out := State{Last: sv.Last, Domain: m.domain(), Shadowing: m.shadowed()}
-	props, err := m.show(ctx)
+	out := State{Last: sv.Last, Domain: m.domain(), Server: "systemd", Name: unit, FixUnit: m.Docker == nil}
+	if m.Docker != nil {
+		out.Server, out.Name = "docker", m.Container
+	}
+	u, err := m.show(ctx)
 	if err != nil {
 		return out, err
 	}
-	out.State, out.Boot, out.Version = "stopped", props["UnitFileState"] == "enabled", sv.Version
-	if props["ActiveState"] == "active" {
+	out.State, out.Boot, out.Version, out.Shadowing = "stopped", u.boot, sv.Version, u.shadowing
+	if u.active {
 		out.State = "running"
+		out.Since, out.Started = u.started, u.started
 		if st, err := m.status(ctx); err == nil {
-			out.Since, out.Started = st.Server.Started, st.Server.Started
+			if u.started.IsZero() {
+				out.Since, out.Started = st.Server.Started, st.Server.Started
+			}
 			if !st.Server.Answering {
 				out.State = "paused"
 			}
@@ -275,11 +330,21 @@ func (m *mod) newest(ctx context.Context, repo string) string {
 	return m.latest.tag
 }
 
-// show reads the unit's state from systemd.
-func (m *mod) show(ctx context.Context) (map[string]string, error) {
+// shown is thefeed-server as systemd or Docker sees it.
+type shown struct {
+	active, boot bool
+	started      time.Time // zero: /status says
+	shadowing    []string
+}
+
+// show reads the unit's state from systemd, or the container's from Docker.
+func (m *mod) show(ctx context.Context) (shown, error) {
+	if m.Docker != nil {
+		return m.showContainer(ctx)
+	}
 	out, err := m.Systemd.Run(ctx, "show", unit, "--property=ActiveState,UnitFileState")
 	if err != nil {
-		return nil, err
+		return shown{}, err
 	}
 	props := map[string]string{}
 	for _, l := range strings.Split(string(out), "\n") {
@@ -287,13 +352,17 @@ func (m *mod) show(ctx context.Context) (map[string]string, error) {
 			props[k] = v
 		}
 	}
-	return props, nil
+	return shown{active: props["ActiveState"] == "active", boot: props["UnitFileState"] == "enabled", shadowing: m.shadowed()}, nil
 }
 
 func (m *mod) reply(w http.ResponseWriter, ctx context.Context) {
 	s, err := m.state(ctx)
 	if err != nil {
-		admin.WriteError(w, http.StatusBadGateway, admin.FieldError{Message: "Couldn't ask systemd about thefeed-server: " + err.Error()})
+		who := "systemd"
+		if m.Docker != nil {
+			who = "Docker"
+		}
+		admin.WriteError(w, http.StatusBadGateway, admin.FieldError{Message: "Couldn't ask " + who + " about " + s.Name + ": " + err.Error()})
 		return
 	}
 	admin.WriteJSON(w, http.StatusOK, s)
@@ -417,6 +486,18 @@ func systemctl(args ...string) func(*mod, context.Context) error {
 	return func(m *mod, ctx context.Context) error { _, err := m.Systemd.Run(ctx, args...); return err }
 }
 
+// server runs systemctl verb thefeed-server, or does the same to its
+// container in Docker mode.
+func server(verb string) func(*mod, context.Context) error {
+	return func(m *mod, ctx context.Context) error {
+		if m.Docker != nil {
+			return m.toContainer(ctx, verb)
+		}
+		_, err := m.Systemd.Run(ctx, verb, unit)
+		return err
+	}
+}
+
 func answering(on bool) func(*mod, context.Context) error {
 	return func(m *mod, ctx context.Context) error { return m.Control.SetAnswering(ctx, on) }
 }
@@ -424,11 +505,11 @@ func answering(on bool) func(*mod, context.Context) error {
 var power = map[string]action{
 	"pause":    {name: "Stop answering", set: "paused", run: answering(false)},
 	"resume":   {name: "Resume answering", last: "Answering again", run: answering(true)},
-	"restart":  {name: "Restart", last: "Restarted", run: systemctl("restart", unit)},
-	"stop":     {name: "Stop server", set: "stopped", run: systemctl("stop", unit)},
-	"start":    {name: "Start server", last: "Started", run: systemctl("start", unit)},
-	"boot-on":  {name: "Start on boot on", keep: true, run: systemctl("enable", unit)},
-	"boot-off": {name: "Start on boot off", keep: true, run: systemctl("disable", unit)},
+	"restart":  {name: "Restart", last: "Restarted", run: server("restart")},
+	"stop":     {name: "Stop server", set: "stopped", run: server("stop")},
+	"start":    {name: "Start server", last: "Started", run: server("start")},
+	"boot-on":  {name: "Start on boot on", keep: true, run: server("enable")},
+	"boot-off": {name: "Start on boot off", keep: true, run: server("disable")},
 	// With start on boot off, the server stays stopped from here.
 	"reboot":   {name: "Reboot", last: "Machine rebooted", set: "stopped", down: true, run: systemctl("reboot")},
 	"shutdown": {name: "Shut down", keep: true, down: true, typed: true, run: systemctl("poweroff")},
