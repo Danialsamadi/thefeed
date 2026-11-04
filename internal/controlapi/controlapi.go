@@ -36,6 +36,7 @@ const SocketName = "control.sock"
 // Status is GET /status.
 type Status struct {
 	Server     Server           `json:"server"`
+	Lists      Lists            `json:"lists"`
 	Feed       Feed             `json:"feed"`
 	Channels   *Channels        `json:"channels,omitempty"`
 	Chat       *Chat            `json:"chat,omitempty"`
@@ -54,6 +55,15 @@ type Server struct {
 	// value the server is running with, as thefeed.env would write it.
 	// Secret settings are left out.
 	Config map[string]string `json:"config"`
+}
+
+// Lists is the source lists the server runs, never null: public channels as
+// last loaded (at start or by a reload), and the private invite hashes and X
+// accounts it read at start. The Nitter instances are in Server.Config.
+type Lists struct {
+	Channels []string `json:"channels"` // names, without the @
+	Private  []string `json:"private"`  // invite hashes
+	X        []string `json:"x"`
 }
 
 // Feed is DNS query volume, per domain the server answers on: feed, chat

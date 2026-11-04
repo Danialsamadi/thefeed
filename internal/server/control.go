@@ -30,6 +30,7 @@ type control struct {
 	dns       *DNSServer
 	started   time.Time
 	effective map[string]string
+	invites   []string // the private channels' invite hashes
 }
 
 func (c *control) handler() http.Handler {
@@ -94,6 +95,12 @@ func (c *control) status() controlapi.Status {
 		if s, ok := serverconfig.Lookup(k); ok && !s.Secret {
 			st.Server.Config[k] = v
 		}
+	}
+	names := d.feed.ChannelNames() // public, then private, then X: see applyChannels
+	st.Lists = controlapi.Lists{
+		Channels: append([]string{}, names[:len(names)-len(d.privateIDs)-len(d.xAccounts)]...),
+		Private:  append([]string{}, c.invites...),
+		X:        append([]string{}, d.xAccounts...),
 	}
 	st.Feed.Domains = d.counts.snapshot(d.zones(), time.Now())
 	if d.chat != nil {

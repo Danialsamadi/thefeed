@@ -281,6 +281,9 @@ func TestCtlReload(t *testing.T) {
 	if got, want := fmt.Sprint(c.channels(t)), "[news pv:94eb7a80 x/jack]"; got != want {
 		t.Fatalf("channels at start = %s, want %s", got, want)
 	}
+	if got, want := fmt.Sprintf("%+v", c.status(t).Lists), "{Channels:[news] Private:[AbCdEf123456] X:[jack]}"; got != want {
+		t.Errorf("lists at start = %s, want %s", got, want)
+	}
 	if err := os.WriteFile(filepath.Join(c.dir, "channels.txt"), []byte("@news\n@daily\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -289,6 +292,26 @@ func TestCtlReload(t *testing.T) {
 	}
 	if got, want := fmt.Sprint(c.channels(t)), "[news daily pv:94eb7a80 x/jack]"; got != want {
 		t.Errorf("channels after reload = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprintf("%+v", c.status(t).Lists), "{Channels:[news daily] Private:[AbCdEf123456] X:[jack]}"; got != want {
+		t.Errorf("lists after reload = %s, want %s", got, want)
+	}
+	if _, body := c.raw(t, "GET", "/status", ""); !strings.Contains(body, `"lists":{"channels":["news","daily"],"private":["AbCdEf123456"],"x":["jack"]}`) {
+		t.Errorf("/status = %s, want the lists", body)
+	}
+}
+
+// No list is ever left out: empty is [], not missing.
+func TestCtlNoLists(t *testing.T) {
+	c := startCtl(t, func(cfg *Config) {
+		for _, f := range []string{cfg.PrivateChannelsFile, cfg.XAccountsFile} {
+			if err := os.Remove(f); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if _, body := c.raw(t, "GET", "/status", ""); !strings.Contains(body, `"lists":{"channels":["news"],"private":[],"x":[]}`) {
+		t.Errorf("/status = %s, want empty private and x lists", body)
 	}
 }
 

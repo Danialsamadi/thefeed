@@ -3,7 +3,6 @@ package settings
 import (
 	"context"
 	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,17 +46,10 @@ type listFile struct {
 	path string // "" for the instances
 	hash string
 	list *serverconfig.List
-	// ran is the items the running server uses, and ok whether that's known.
+	// ran is the items the running server uses, as /status reports them,
+	// and ok whether the server answered.
 	ran []string
 	ok  bool
-	// snap is the file as the running server read it, when the panel saw it
-	// unchanged since the server started. Discard writes it back.
-	snap *snapshot
-}
-
-type snapshot struct {
-	Started time.Time `json:"started"`
-	Content string    `json:"content"`
 }
 
 func (m *module) loadList(f *files, src source) (*listFile, error) {
@@ -79,43 +71,52 @@ func (m *module) loadList(f *files, src source) (*listFile, error) {
 		return nil, err
 	}
 	l := &listFile{src: src, path: path, hash: hash, list: src.codec.Parse(data)}
-	if src.id == "channels" || f.running == nil {
-		return l, nil // public channels apply live, so nothing of theirs waits
+	if f.running != nil {
+		l.ran, l.ok = map[string][]string{"channels": f.runLists.Channels, "private": f.runLists.Private, "x": f.runLists.X}[src.id], true
 	}
-	// /status doesn't carry the lists, so the panel keeps a copy of each file
-	// as the server read it: the file as it is, if it hasn't changed since the
-	// server started.
-	//
-	// ponytail: a file edited by hand after a start, before the panel looked,
-	// has no copy: it shows as waiting and discard leaves it. Add the lists
-	// to /status if that matters.
-	var snap snapshot
-	if found, err := m.ran.Get(src.id, &snap); err != nil || !found || !snap.Started.Equal(f.started) {
-		fi, err := os.Stat(path)
-		if err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-		if err == nil && fi.ModTime().After(f.started) {
-			return l, nil
-		}
-		snap = snapshot{Started: f.started, Content: string(data)}
-		if err := m.ran.Put(src.id, snap); err != nil {
-			return nil, err
-		}
-	}
-	l.snap, l.ran, l.ok = &snap, src.codec.Parse([]byte(snap.Content)).Items, true
 	return l, nil
 }
 
-// waiting is whether the server runs something other than what's saved.
-func (l *listFile) waiting(f *files) bool {
-	switch {
-	case l.src.id == "channels" || f.running == nil:
-		return false
-	case !l.ok:
-		return true
+// runs is item as the server runs it: a private channel's invite hash, ""
+// for a link the server can't read; any other item as it is.
+func (l *listFile) runs(item string) string {
+	if l.src.id != "private" {
+		return item
 	}
-	return !slices.Equal(l.ran, l.list.Items)
+	h, _ := serverconfig.ParseInviteHash(item)
+	return h
+}
+
+// waiting is whether the server runs something other than what's saved.
+// Like the server, it skips an invite it can't read or already has.
+func (l *listFile) waiting() bool {
+	var saved []string
+	for _, it := range l.list.Items {
+		if r := l.runs(it); r != "" && (l.src.id != "private" || !slices.Contains(saved, r)) {
+			saved = append(saved, r)
+		}
+	}
+	return l.ok && !slices.Equal(l.ran, saved)
+}
+
+// running is what the server runs, as the file would hold it: an invite
+// keeps its saved link, or becomes a t.me one.
+func (l *listFile) running() []string {
+	out := []string{}
+	for _, r := range l.ran {
+		it := r
+		if l.src.id == "private" {
+			it = "https://t.me/+" + r
+		}
+		for _, saved := range l.list.Items {
+			if l.runs(saved) == r {
+				it = saved
+				break
+			}
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 type itemView struct {
@@ -135,12 +136,13 @@ func (f *files) listViews() map[string]listView {
 	n := 0 // reader channel numbers run on from one list to the next
 	for _, src := range sources {
 		l := f.lists[src.id]
-		lv := listView{Applies: "restart", Waiting: l.waiting(f), Items: []itemView{}}
+		lv := listView{Applies: "restart", Waiting: l.waiting(), Items: []itemView{}}
 		if src.id == "channels" {
 			lv.Applies = "live"
 		}
 		for _, it := range l.list.Items {
-			iv := itemView{Name: it, Waiting: l.ok && !slices.Contains(l.ran, it)}
+			r := l.runs(it)
+			iv := itemView{Name: it, Waiting: l.ok && r != "" && !slices.Contains(l.ran, r)}
 			if src.id != "instances" {
 				n++
 				iv.Channel = n
