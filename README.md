@@ -112,18 +112,16 @@ sudo bash -c "$(curl -Ls https://raw.githubusercontent.com/sartoopjj/thefeed/mai
 
 No Go toolchain needed. Two containers from prebuilt images (amd64 and arm64): `thefeed-server`, which runs as non-root UID 1000, and `thefeed-admin`, the web panel.
 
-Two files configure it:
-
-- **`.env`** (from `.env.example`): which images and tags compose runs. The panel writes the server's tag here when it updates or rolls back.
-- **`data/thefeed.env`** (from `configs/thefeed.env.example`): every setting. The server and the panel read it themselves, and the panel edits it. Keep `THEFEED_LISTEN=:5300` and `THEFEED_CONTROL_SOCKET=true` in it.
+Settings live in `data/thefeed.env` (from `.env.example`). The server and the panel read it themselves, and the panel edits it. The panel writes the server's image tag to `.env` next to `docker-compose.yml` when it updates or rolls back.
 
 ```bash
 # 1. Get the compose file and the examples
 git clone https://github.com/sartoopjj/thefeed /opt/thefeed && cd /opt/thefeed
 
 # 2. Configure: set THEFEED_DOMAIN and THEFEED_KEY
-cp .env.example .env
-mkdir -p data && cp configs/thefeed.env.example data/thefeed.env && nano data/thefeed.env
+mkdir -p data && cp .env.example data/thefeed.env
+printf 'THEFEED_LISTEN=:5300\nTHEFEED_NO_TELEGRAM=1\n' >> data/thefeed.env
+nano data/thefeed.env
 
 # 3. Add your channels; the server must own its data
 cp configs/channels.txt data/

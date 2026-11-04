@@ -2,8 +2,8 @@
 # thefeed-server and its admin panel — Docker Compose
 # ============================================================
 #
-#   cp .env.example .env                                    # which images
-#   mkdir -p data && cp configs/thefeed.env.example data/thefeed.env
+#   mkdir -p data && cp .env.example data/thefeed.env
+#   printf 'THEFEED_LISTEN=:5300\nTHEFEED_NO_TELEGRAM=1\n' >> data/thefeed.env
 #   nano data/thefeed.env                                   # domain and key
 #   cp configs/channels.txt data/
 #   sudo chown -R 1000:1000 data                            # the server is uid 1000
