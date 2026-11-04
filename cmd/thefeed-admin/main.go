@@ -18,6 +18,7 @@ import (
 
 	"github.com/sartoopjj/thefeed/internal/admin"
 	"github.com/sartoopjj/thefeed/internal/admin/logs"
+	"github.com/sartoopjj/thefeed/internal/admin/service"
 	"github.com/sartoopjj/thefeed/internal/admin/settings"
 	"github.com/sartoopjj/thefeed/internal/admin/sysmetrics"
 	"github.com/sartoopjj/thefeed/internal/admin/web"
@@ -27,6 +28,7 @@ import (
 // modules is the app wiring: each feature module is one line here.
 var modules = []admin.Module{
 	logs.Module,
+	service.Module,
 	settings.Module,
 	sysmetrics.Module,
 	web.Module,

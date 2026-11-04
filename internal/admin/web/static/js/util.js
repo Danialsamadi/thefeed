@@ -15,6 +15,16 @@ function when(t, now = new Date()) {
   return d.getFullYear() === now.getFullYear() ? `${day}, ${hm}` : `${day} ${d.getFullYear()}, ${hm}`;
 }
 
+// upFor says how long it's been since t, the way uptime reads: "under a
+// minute", "5 minutes", "3 hours", "13 days", rounded down.
+function upFor(t, now = new Date()) {
+  const m = Math.floor((now - new Date(t)) / 60000);
+  if (m < 1) return 'under a minute';
+  if (m < 60) return plural(m, 'minute', 'minutes');
+  if (m < 1440) return plural(Math.floor(m / 60), 'hour', 'hours');
+  return plural(Math.floor(m / 1440), 'day', 'days');
+}
+
 // fieldErrors puts the API's {errors:[{field,message}]} onto a form's fields:
 // {field: message}, with "" for the whole form, including fields it lacks.
 function fieldErrors(data, fields) {
