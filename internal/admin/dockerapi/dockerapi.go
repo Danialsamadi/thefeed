@@ -1,7 +1,7 @@
 // Package dockerapi is a small client for the Docker Engine API: net/http
 // over the Engine's unix socket, in the Engine's own API version.
 // It makes only the calls the panel needs: container inspect, start, stop,
-// restart, update, create, remove and logs, and image pull.
+// restart, update, create, rename, remove and logs, and image pull.
 //
 // An Engine error is an *Error with the Engine's own message.
 package dockerapi
@@ -98,6 +98,11 @@ func (c *Client) post(ctx context.Context, name, verb string) error {
 func (c *Client) SetRestart(ctx context.Context, name, policy string) error {
 	body := map[string]any{"RestartPolicy": map[string]string{"Name": policy}}
 	return c.do(ctx, "POST", "/containers/"+url.PathEscape(name)+"/update", nil, body, nil)
+}
+
+// Rename names the container name to.
+func (c *Client) Rename(ctx context.Context, name, to string) error {
+	return c.do(ctx, "POST", "/containers/"+url.PathEscape(name)+"/rename", url.Values{"name": {to}}, nil, nil)
 }
 
 // Remove removes the stopped container name.

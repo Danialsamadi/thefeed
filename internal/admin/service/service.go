@@ -48,7 +48,8 @@
 //	update {version}                 pull the image's repository at that tag, write THEFEED_SERVER_TAG
 //	                                 into compose's .env (THEFEED_ADMIN_COMPOSE_ENV, default
 //	                                 /opt/thefeed/.env), recreate the container on it, and put the
-//	                                 old image and .env back if it isn't healthy in 60 s
+//	                                 old image and .env back if it isn't healthy in 60 s, keeping the
+//	                                 failed container stopped as <container>-failed for its log
 //	rollback                         pull the previous version's tag, write it into .env, recreate
 //	fix-unit                         400: the settings in shadowing are removed from docker-compose.yml
 //
