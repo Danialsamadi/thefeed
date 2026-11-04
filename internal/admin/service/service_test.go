@@ -170,10 +170,15 @@ type panel struct {
 const origin = "https://panel.test"
 
 // newPanel is the real admin app with the service module on m, signed in.
-func newPanel(t *testing.T, m *machine) *panel {
+// edits change its options, such as dropping the fake release source.
+func newPanel(t *testing.T, m *machine, edits ...func(*service.Options)) *panel {
 	t.Helper()
 	cfg := admin.Config{AdminDir: t.TempDir(), ServerDataDir: m.data, Clock: admin.ClockFunc(func() time.Time { return m.now })}
-	app, err := admin.New(cfg, service.New(service.Options{Systemd: m, Control: m, Releases: m, Sleep: m.sleep, Binary: m.bin, Unit: m.unit}))
+	o := service.Options{Systemd: m, Control: m, Releases: m, Sleep: m.sleep, Binary: m.bin, Unit: m.unit}
+	for _, e := range edits {
+		e(&o)
+	}
+	app, err := admin.New(cfg, service.New(o))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,5 +628,63 @@ func TestStoppedServerSaysSinceWhen(t *testing.T) {
 	m.now = m.now.Add(time.Hour)
 	if s := p.state(p.do("GET", "/api/service", nil)); s.State != "stopped" || !s.Since.Equal(stoppedAt) {
 		t.Fatalf("an hour after stopping: %+v, want stopped since %s", s, stoppedAt)
+	}
+}
+
+// Readers add the server with one link: domain, key and server key, as
+// thefeed-server --print-config prints it. It holds the key, so it stays out
+// of the action record.
+func TestImportLinkIsWhatPrintConfigPrints(t *testing.T) {
+	m := newMachine(t, "v0.41.0")
+	env := filepath.Join(m.data, "thefeed.env")
+	m.write(env, "THEFEED_DOMAIN="+domain+"\nTHEFEED_EXTRA_DOMAINS=a.example.com,b.example.com\nTHEFEED_KEY=s3cret-pass\n", 0o600)
+	m.write(filepath.Join(m.data, "server_ed25519.key"), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n", 0o600)
+	p := newPanel(t, m)
+
+	w := p.do("GET", "/api/service/import-link", nil)
+	var got struct{ Link string }
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+		t.Fatalf("GET import-link = %d %s", w.Code, w.Body)
+	}
+	if want := "thefeed://t.example.com/s3cret-pass?sk=A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg&d=a.example.com%2Cb.example.com&r=1.1.1.1%2C8.8.8.8"; got.Link != want {
+		t.Fatalf("link = %q, want %q", got.Link, want)
+	}
+	if got := p.actions(); len(got) != 0 {
+		t.Fatalf("action record = %q, want nothing", got)
+	}
+
+	m.write(env, "THEFEED_DOMAIN="+domain+"\n", 0o600)
+	p.errorOf(p.do("GET", "/api/service/import-link", nil), http.StatusConflict)
+}
+
+// THEFEED_ADMIN_RELEASE_BASE_URL points the real release source somewhere
+// other than github.com, laid out the same way: the end-to-end suite updates
+// from a local fake release like this one.
+func TestReleasesCanComeFromAnotherAddress(t *testing.T) {
+	m := newMachine(t, "v0.41.0")
+	m.publish("fork/thefeed", "v0.41.1", "v0.41.1")
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/fork/thefeed/releases/latest" {
+			http.Redirect(w, r, "/fork/thefeed/releases/tag/v0.41.1", http.StatusFound)
+			return
+		}
+		tag, name, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/fork/thefeed/releases/download/"), "/")
+		b, ok := m.assets["fork/thefeed/"+tag+"/"+name]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(b)
+	}))
+	defer gh.Close()
+	m.write(filepath.Join(m.data, "thefeed.env"), "THEFEED_DOMAIN="+domain+"\nTHEFEED_ADMIN_RELEASE_REPO=fork/thefeed\nTHEFEED_ADMIN_RELEASE_BASE_URL="+gh.URL+"\n", 0o600)
+	p := newPanel(t, m, func(o *service.Options) { o.Releases = nil })
+
+	if s := p.state(p.do("GET", "/api/service", nil)); s.Latest != "v0.41.1" || !s.Update {
+		t.Fatalf("state = %+v, want v0.41.1 found at %s", s, gh.URL)
+	}
+	p.act("update", map[string]string{"version": "v0.41.1"})
+	if got := m.read(m.bin); got != "v0.41.1" || m.running != "v0.41.1" {
+		t.Fatalf("binary %q, running %q; want v0.41.1 from %s", got, m.running, gh.URL)
 	}
 }
