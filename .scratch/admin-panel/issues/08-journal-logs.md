@@ -1,6 +1,6 @@
 # 08 Logs from the journal, per feature and for the server
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 04
 Spec: `.scratch/admin-panel/spec.md`, section "Logs"
 
