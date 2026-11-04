@@ -13,6 +13,9 @@
   let busy = '';      // the action running from this page
   let said = null;    // [text, bad]: how the last action went, until the next one
   let srcErr = '';    // the release source form's error
+  // The readers' import link holds the key: fetched when the page opens, so
+  // Copy writes it within the click, as Safari wants; never polled.
+  let link = '', linkErr = '', copied = '', copiedT; // copied: '', 'ok' or 'fail'
 
   // Each action's confirm: q, why and go; danger tints it red, typed asks for
   // the domain. Without q it runs at once. busy is the status line meanwhile.
@@ -116,7 +119,11 @@
           <span class="onoff" aria-hidden="true">${svc.boot ? 'On' : 'Off'}</span>
           <button class="sw-btn" type="button" role="switch" aria-checked="${svc.boot}" aria-labelledby="svc-boot" data-act="svc-boot" data-k="sw-boot"${off}><span class="tr"></span></button></div>`)
       + Panel.sec('Version', version + source)
-      + Panel.sec('Machine', row(esc(svc.domain || S.host), "A reboot takes about a minute. After a shutdown, only your hosting provider's console turns it back on.", [['reboot', 'Reboot…'], ['shutdown', 'Shut down…']]));
+      + Panel.sec('Machine', row(esc(svc.domain || S.host), "A reboot takes about a minute. After a shutdown, only your hosting provider's console turns it back on.", [['reboot', 'Reboot…'], ['shutdown', 'Shut down…']]))
+      + Panel.sec('Readers', copied === 'fail'
+        ? `<div class="it"><div class="tx"><b>Import link</b><small class="bad">Couldn't copy. Select the link and copy it by hand.</small><input class="linkbox" readonly value="${esc(link)}" aria-label="Import link" data-k="svc-linkbox"></div></div>`
+        : `<div class="it"><div class="tx"><b>Import link</b><small${linkErr ? ' class="bad"' : ''}>${linkErr ? esc(linkErr) : copied === 'ok' ? 'Copied. Paste it into the app under Settings, Configs.' : 'For readers: domain, key and server key in one link.'}</small></div>
+          <button class="btn quiet" type="button" data-act="svc-copy" data-k="svc-copy">${copied === 'ok' ? 'Copied' : 'Copy link'}</button></div>`);
   }
 
   function cancel() {
@@ -133,7 +140,10 @@
       if (svc.state === 'running') return `Running${svc.version ? ` ${svc.version}` : ''}${svc.started ? `, up ${upFor(svc.started)}` : ''}${svc.update ? ', update available' : ''}`;
       return [`${svc.state === 'paused' ? 'Not answering' : 'Stopped'}${since()}`, 'bad'];
     },
-    open: load,
+    open() {
+      load();
+      loadLink();
+    },
     render: page,
     escape() {
       if (!confirm) return false;
@@ -155,6 +165,30 @@
   };
   Panel.acts['svc-cancel'] = cancel;
   Panel.acts['svc-boot'] = () => run(svc.boot ? 'boot-off' : 'boot-on');
+
+  async function loadLink() {
+    [link, linkErr, copied] = ['', '', ''];
+    const r = await Panel.api('GET', '/api/service/import-link');
+    if (r?.ok) link = r.data.link;
+    else if (r) linkErr = r.data.errors?.[0]?.message || "Couldn't make the import link.";
+    Panel.render();
+  }
+  // Copied shows for 2.5 s; if the browser won't copy, the link shows in a
+  // field to copy by hand.
+  Panel.acts['svc-copy'] = async () => {
+    if (!link) await loadLink();
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      copied = 'ok';
+    } catch {
+      copied = 'fail';
+    }
+    Panel.render();
+    clearTimeout(copiedT);
+    if (copied === 'ok') copiedT = setTimeout(() => { copied = ''; Panel.render(); }, 2500);
+    else document.querySelector('.v-control [data-k="svc-linkbox"]')?.select();
+  };
   Panel.forms.svcsrc = async f => {
     const r = await Panel.api('POST', '/api/service/source', { repo: f.elements.repo.value });
     if (r?.ok) {
