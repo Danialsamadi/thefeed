@@ -65,7 +65,7 @@ build-server-dev:
 # ---- local development runs (settings come from .env, which is gitignored) ----
 # Most settings are THEFEED_* variables the server reads itself — the same ones
 # docker-compose uses. Only the flags with no env support are passed as
-# arguments. Copy .env.example to .env and fill it in first.
+# arguments. Copy configs/thefeed.env.example to .env and fill it in first.
 #
 # THEFEED_* are handed across the sudo boundary explicitly rather than with
 # `sudo -E`, because a default sudoers env_reset would silently drop them.
@@ -74,7 +74,7 @@ build-server-dev:
 # own build cache and leave root-owned files there, which then breaks every
 # later non-root build with "permission denied".
 run-server: build-server-dev
-	@test -f .env || { echo "no .env — cp .env.example .env and fill it in"; exit 1; }
+	@test -f .env || { echo "no .env — cp configs/thefeed.env.example .env and fill it in"; exit 1; }
 	@# Every value is :-defaulted: this runs under `bash -u`, and .env.example
 	@# ships the Telegram and channel lines commented out, so the documented
 	@# `cp .env.example .env && make run-server` died on "unbound variable"
@@ -96,7 +96,7 @@ run-server: build-server-dev
 
 # The client needs no root (it binds a high port) and no THEFEED_* vars.
 run-client:
-	@test -f .env || { echo "no .env — cp .env.example .env and fill it in"; exit 1; }
+	@test -f .env || { echo "no .env — cp configs/thefeed.env.example .env and fill it in"; exit 1; }
 	@# Every value is :-defaulted: this runs under `bash -u`, and .env.example
 	@# ships the Telegram and channel lines commented out, so the documented
 	@# `cp .env.example .env && make run-server` died on "unbound variable"
@@ -116,7 +116,7 @@ run-client:
 #
 # DATA_DIR defaults to the server's own default (./data); override in .env.
 define server_cmd
-	@test -f .env || { echo "no .env — cp .env.example .env and fill it in"; exit 1; }
+	@test -f .env || { echo "no .env — cp configs/thefeed.env.example .env and fill it in"; exit 1; }
 	@$(MAKE) --no-print-directory build-server-dev
 	@# Every value is :-defaulted: this runs under `bash -u`, and .env.example
 	@# ships the Telegram and channel lines commented out, so the documented

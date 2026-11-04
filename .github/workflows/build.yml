@@ -12,6 +12,8 @@ on:
         type: choice
         default: all
         options: [all, android, desktop, ios, macos]
+  # Tests and the container images only (built, never pushed).
+  pull_request:
 
 permissions:
   contents: write
@@ -39,7 +41,7 @@ jobs:
 
   build:
     needs: test
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","desktop"]'), inputs.platforms)
+    if: github.event_name == 'push' || contains(fromJSON('["all","desktop"]'), inputs.platforms)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -253,9 +255,59 @@ jobs:
           name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
           path: build/
 
+  # Container images for docker-compose.yml and install.sh: pushed to GHCR
+  # for a release tag, only built for a pull request. The Dockerfiles
+  # cross-compile Go, so QEMU runs just the runtime stage's few commands.
+  images:
+    needs: test
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - image: thefeed-server
+            file: Dockerfile
+          - image: thefeed-admin
+            file: Dockerfile.admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Tags and version
+        id: meta
+        run: |
+          # Image names must be lowercase; expressions can't lowercase.
+          if [ "${{ github.ref_type }}" = tag ]; then
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.image }}"
+            echo "tags=${image}:${GITHUB_REF_NAME},${image}:latest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${{ github.ref_type == 'tag' && github.ref_name || '0.0.1' }}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        if: github.ref_type == 'tag'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.ref_type == 'tag' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+            DATE=${{ steps.meta.outputs.date }}
+
   android-apk:
     needs: test
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","android"]'), inputs.platforms)
+    if: github.event_name == 'push' || contains(fromJSON('["all","android"]'), inputs.platforms)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -362,7 +414,7 @@ jobs:
 
   ios-ipa:
     needs: test
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","ios"]'), inputs.platforms)
+    if: github.event_name == 'push' || contains(fromJSON('["all","ios"]'), inputs.platforms)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -434,7 +486,7 @@ jobs:
 
   macos-dmg:
     needs: test
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all","macos"]'), inputs.platforms)
+    if: github.event_name == 'push' || contains(fromJSON('["all","macos"]'), inputs.platforms)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4

@@ -56,7 +56,7 @@ func (journalctl) Read(ctx context.Context, cursor string, n int) ([]byte, error
 	if cursor != "" {
 		args = append(args, "--cursor="+cursor)
 	}
-	out, err := exec.CommandContext(ctx, "journalctl", args...).Output()
+	out, err := admin.HostCommand(ctx, "journalctl", args...).Output()
 	if ee := (*exec.ExitError)(nil); errors.As(err, &ee) && len(ee.Stderr) > 0 {
 		return nil, fmt.Errorf("journalctl: %s", bytes.TrimSpace(ee.Stderr))
 	}

@@ -41,6 +41,26 @@ func TestEnvGet(t *testing.T) {
 	}
 }
 
+func TestEnvSetenvRealEnvironmentWins(t *testing.T) {
+	t.Setenv("THEFEED_DOMAIN", "real.example.com")
+	t.Setenv("THEFEED_MSG_LIMIT", "") // set, though empty: still the real environment's
+	for _, k := range []string{"MY_OWN_THING", "THEFEED_GITHUB_RELAY_BRANCH", "THEFEED_PADDING"} {
+		t.Setenv(k, "") // restored to unset afterwards
+		os.Unsetenv(k)
+	}
+
+	ParseEnv([]byte(sampleEnv)).Setenv()
+
+	for key, want := range map[string]string{
+		"THEFEED_DOMAIN": "real.example.com", "THEFEED_MSG_LIMIT": "",
+		"MY_OWN_THING": "keep me", "THEFEED_GITHUB_RELAY_BRANCH": "main", "THEFEED_PADDING": "40",
+	} {
+		if got := os.Getenv(key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestEnvSetChangesOnlyThatLine(t *testing.T) {
 	for _, c := range []struct{ key, value, want string }{
 		{"THEFEED_DOMAIN", "t2.example.com", "# thefeed settings\nTHEFEED_DOMAIN=t2.example.com\n\n# hand-added, unknown to the registry\nMY_OWN_THING=keep me\nexport THEFEED_MSG_LIMIT=15\r\nTHEFEED_GITHUB_RELAY_BRANCH=\"main\"\nTHEFEED_PADDING=32\nTHEFEED_PADDING=40"},
