@@ -74,6 +74,10 @@ func TestE2E(t *testing.T) {
 		code, raw, err := s.p.do(http.MethodGet, "/api/auth/setup", nil)
 		return code == http.StatusOK, fmt.Sprintf("%d %s %v", code, raw, err)
 	})
+	eventually(t, time.Minute, "thefeed-server answers on its control socket", func() (bool, string) {
+		_, err := s.status()
+		return err == nil, fmt.Sprint(err)
+	})
 	for _, step := range []struct {
 		name string
 		run  func(*testing.T)
@@ -130,6 +134,11 @@ func install(t *testing.T, build, release string) {
 	}
 	if err == nil {
 		err = os.WriteFile(filepath.Join(dataDir, "thefeed.env"), append(seed, "THEFEED_ADMIN_RELEASE_BASE_URL="+release+"\n"...), 0o600)
+	}
+	if err == nil {
+		// thefeed-server won't start with nothing to serve. Not @durov: the
+		// public-channel flow adds that one.
+		err = os.WriteFile(filepath.Join(dataDir, "channels.txt"), []byte("@telegram\n"), 0o600)
 	}
 	if err != nil {
 		t.Fatal(err)
