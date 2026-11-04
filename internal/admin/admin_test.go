@@ -322,6 +322,28 @@ func TestResetAdminRefusesWhilePanelRuns(t *testing.T) {
 	}
 }
 
+// The sign-in page shows how to reset the admin from a shell on the host,
+// for the way the panel runs: the panel must be stopped for it.
+func TestTheSignInPageSaysHowToReset(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ container, want string }{
+		{"", "systemctl stop thefeed-admin && " + exe + " reset-admin && systemctl start thefeed-admin"},
+		{"1", "docker stop thefeed-admin && docker run --rm --volumes-from thefeed-admin $(docker inspect -f '{{.Config.Image}}' thefeed-admin) reset-admin && docker start thefeed-admin"},
+	} {
+		t.Setenv("THEFEED_ADMIN_CONTAINER", c.container)
+		var got struct{ Reset string }
+		if err := json.NewDecoder(newPanel(t).do("GET", "/api/auth/setup", "", nil).Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Reset != c.want {
+			t.Errorf("container %q: reset = %q, want %q", c.container, got.Reset, c.want)
+		}
+	}
+}
+
 func TestModuleRoutesBucketsAndActionRecord(t *testing.T) {
 	demo := func(d *admin.Deps) error {
 		b, err := d.Bucket("demo.things")

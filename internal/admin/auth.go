@@ -335,7 +335,7 @@ func (a *App) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, FieldError{Message: "Couldn't read the panel's database."})
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]bool{"needed": !ok})
+	WriteJSON(w, http.StatusOK, map[string]any{"needed": !ok, "reset": ResetCommand()})
 }
 
 func (a *App) handleSetup(w http.ResponseWriter, r *http.Request) {

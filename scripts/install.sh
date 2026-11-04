@@ -1210,7 +1210,7 @@ show_panel() {
     local reset="systemctl stop thefeed-admin && ${INSTALL_DIR}/thefeed-admin reset-admin && systemctl start thefeed-admin"
     if [[ "$2" == true ]]; then
         see="docker logs thefeed-admin"
-        reset="docker stop thefeed-admin && docker run --rm -v ${INSTALL_DIR}:${INSTALL_DIR} \$(docker inspect -f '{{.Config.Image}}' thefeed-admin) reset-admin && docker start thefeed-admin"
+        reset="docker stop thefeed-admin && docker run --rm --volumes-from thefeed-admin \$(docker inspect -f '{{.Config.Image}}' thefeed-admin) reset-admin && docker start thefeed-admin"
     fi
     host=$(env_get THEFEED_ADMIN_HOSTNAME)
     for i in $(seq 1 20); do

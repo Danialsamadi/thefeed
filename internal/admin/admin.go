@@ -28,7 +28,8 @@
 //
 // # Core API
 //
-//	GET  /api/auth/setup        {"needed":bool}: no admin yet, setup code required
+//	GET  /api/auth/setup        {"needed":bool,"reset":"..."}: no admin yet, setup code
+//	                            required; reset is the shell one-liner that resets it
 //	POST /api/auth/setup        {code,username,password,repeat} → session
 //	POST /api/auth/login        {username,password} → session; 401 with triesLeft,
 //	                            429 with retryAfter (seconds) while locked
