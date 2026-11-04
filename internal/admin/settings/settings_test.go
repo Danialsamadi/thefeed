@@ -394,7 +394,9 @@ func TestSettingsThePanelDoesntShowNeverWait(t *testing.T) {
 }
 
 func TestEquivalentValuesDontWait(t *testing.T) {
-	p := newPanel(t, map[string]string{"thefeed.env": "THEFEED_CHAT_ENABLED=yes\nTHEFEED_X_RSS_INSTANCES=\nTHEFEED_MSG_LIMIT=015\n"})
+	// 0 is the default for the send limit and the sync interval, as the server reads it.
+	p := newPanel(t, map[string]string{"thefeed.env": "THEFEED_CHAT_ENABLED=yes\nTHEFEED_X_RSS_INSTANCES=\nTHEFEED_MSG_LIMIT=015\n" +
+		"THEFEED_CHAT_SEND_PER_HOUR=0\nTHEFEED_CHAT_SYNC_SECONDS=0\n"})
 	p.srv.config["fetch.msgs"] = "15"
 
 	if s := p.state(); s.Waiting != 0 {
