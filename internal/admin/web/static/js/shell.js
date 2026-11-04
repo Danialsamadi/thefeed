@@ -1,7 +1,6 @@
 // The panel shell: the sign-in screens, the nav, the list and detail panes,
 // Control's section list and the states every page shares (can't reach the
-// server, first load, paused). It follows the approved mockup,
-// .scratch/admin-panel/mockup.html.
+// server, first load, paused).
 //
 // Pages plug in. Each page is one file under js/pages/, loaded by one
 // <script defer> in index.html after this file, that registers itself:

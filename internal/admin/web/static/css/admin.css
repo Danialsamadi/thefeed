@@ -1,6 +1,5 @@
-/* thefeed admin panel. Copied from the approved mockup
-   (.scratch/admin-panel/mockup.html): every page's styles live here, so a new
-   page is one JS file and needs no CSS of its own. */
+/* thefeed admin panel. Every page's styles live here, so a new page is one
+   JS file and needs no CSS of its own. */
 @font-face {
   font-family: 'Vazirmatn';
   src: url('/static/Vazirmatn-Regular.woff2') format('woff2');
