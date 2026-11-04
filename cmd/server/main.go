@@ -114,14 +114,8 @@ func main() {
 		}
 	}
 	boolEnv := func(name string, val *bool, env string) {
-		if given[name] {
-			return
-		}
-		switch os.Getenv(env) {
-		case "1", "true", "TRUE", "yes":
-			*val = true
-		case "0", "false", "FALSE", "no":
-			*val = false
+		if v, ok := envBool(env); ok && !given[name] {
+			*val = v
 		}
 	}
 	strEnv("data-dir", dataDir, "THEFEED_DATA_DIR")
@@ -192,6 +186,11 @@ func main() {
 		return
 	}
 
+	if err := checkSettings(given, os.Getenv); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: invalid settings:\n%v\n", err)
+		os.Exit(1)
+	}
+
 	// Create data directory
 	if err := os.MkdirAll(*dataDir, 0700); err != nil {
 		log.Fatalf("Create data dir: %v", err)
@@ -240,10 +239,6 @@ func main() {
 			}
 		}
 	}
-	if *fetchIntervalMin < 3 {
-		fmt.Fprintf(os.Stderr, "Error: --fetch-interval must be at least 3 minutes (got %d)\n", *fetchIntervalMin)
-		os.Exit(1)
-	}
 	if *msgLimit == 15 {
 		if v := os.Getenv("THEFEED_MSG_LIMIT"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -282,7 +277,8 @@ func main() {
 	chatIntEnv := func(flagVal *int, def int, env string) {
 		if *flagVal == def {
 			if v := os.Getenv(env); v != "" {
-				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				// checkSettings has already held it to the setting's range.
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 					*flagVal = n
 				}
 			}

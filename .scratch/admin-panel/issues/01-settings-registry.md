@@ -1,6 +1,6 @@
 # 01 Shared settings registry, env file editor and list codecs
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: none
 Spec: `.scratch/admin-panel/spec.md`, section "Configuration: one source of truth"
 
