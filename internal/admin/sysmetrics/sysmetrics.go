@@ -18,7 +18,7 @@
 //	 "net":{"outNow","inNow","outPeak","scale","out":[60],"in":[60],"sentToday","receivedToday"},
 //	 "ram":{"total","server","mediaCache","system","free"},
 //	 "disk":{"total","reportsLogs","systemData","free"},
-//	 "reach":{"resolvers":{"answered","asked","at"},"telegram":{"reached","of"},"nitter":{"reached","of"},"github":{"ok","detail"}},
+//	 "reach":{"resolvers":{"answered","asked","at"},"telegram":{"reached","of","untried"},"nitter":{…},"github":{"ok","detail"}},
 //	 "process":{"running","since","load":[3],"fds","sockets","listen","redirect"}}
 //
 // Every chart has 60 points of step seconds from from; a point is the
@@ -30,9 +30,10 @@
 // disk's parts each add up to their total. The disk has no media cache
 // part: thefeed-server keeps its media cache in memory.
 //
-// reach.resolvers is null before the first probe; telegram and nitter are
-// null until thefeed-server's /status reports them; github is null with the
-// relay off. process.redirect is "53/udp" when the server listens on
+// reach.resolvers is null before the first probe. telegram counts the data
+// centres and nitter the instances whose last dial or fetch worked, of all
+// of them, and how many weren't tried yet; each is null with its feature
+// off, and github with the relay off. process.redirect is "53/udp" when the server listens on
 // another port and public resolvers still reach it, else "".
 //
 //	GET /api/server/pinned   the Board's pinned line
@@ -451,16 +452,31 @@ type serverPage struct {
 
 type reach struct {
 	Resolvers *resolvers `json:"resolvers"` // null before the first probe
-	// Telegram data centres and Nitter instances reached from here: null
-	// until thefeed-server's /status reports them (ticket 03).
+	// Telegram data centres and Nitter instances reached from here, by
+	// their last dial or fetch: null with the feature off.
 	Telegram *outOf  `json:"telegram"`
 	Nitter   *outOf  `json:"nitter"`
 	GitHub   *github `json:"github"` // null with the GitHub relay off
 }
 
 type outOf struct {
-	Reached int `json:"reached"`
+	Reached int `json:"reached"` // the last try worked
 	Of      int `json:"of"`
+	Untried int `json:"untried"` // not tried yet, so neither reached nor not
+}
+
+// count tallies the last tries: ok, and at, zero when never tried.
+func count[T any](items []T, try func(T) (ok bool, at time.Time)) *outOf {
+	o := &outOf{Of: len(items)}
+	for _, it := range items {
+		switch ok, at := try(it); {
+		case ok:
+			o.Reached++
+		case at.IsZero():
+			o.Untried++
+		}
+	}
+	return o
 }
 
 type github struct {
@@ -526,6 +542,12 @@ func (s *module) page(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	p.Reach.Resolvers = s.reached
 	s.mu.Unlock()
+	if st != nil && st.MTProto != nil {
+		p.Reach.Telegram = count(st.MTProto.DCs, func(dc controlapi.DC) (bool, time.Time) { return dc.OK, dc.At })
+	}
+	if st != nil && st.X != nil {
+		p.Reach.Nitter = count(st.X.Instances, func(in controlapi.Instance) (bool, time.Time) { return in.OK, in.At })
+	}
 	if st != nil && st.GHRelay != nil {
 		g := st.GHRelay
 		p.Reach.GitHub = &github{OK: g.FailStreak == 0 || g.TokenDenied || g.Quota403, Detail: g.LastError}
