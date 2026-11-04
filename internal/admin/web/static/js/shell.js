@@ -11,6 +11,8 @@
 //     render() {},                // the list pane, or the whole Server page: HTML, or null until loaded
 //     detail(id) {},              // board: the open row as {title, sub, html}; rows carry
 //                                 //   data-act="open" data-id="<id>" data-k="row-<id>"
+//     open(id) {},                // board, optional: runs each time a row opens
+//     escape() {},                // board, optional: close an in-place editor; true if it did
 //     count() {},                 // board: how many features need attention, shown on the nav
 //   });
 //   Panel.section({ group: 'Sources', id: 'chan', title: 'Telegram channels',
@@ -24,9 +26,11 @@
 //   Panel.forms.name = form => {}             // submits of form[data-form="name"]
 //   Panel.banners.push(where => html)         // more banners under each screen's header;
 //                                             // where: 'board', 'server', 'control' or 'section'
+//                                             // (a Control section); a Board row's page has none
 //   Panel.poll(fn, ms)                        // live updates; held while paused, offline or hidden
 //   Panel.api(method, path, body)             // {ok, status, data}, or null when unreachable
-//   Panel.render()                            // re-render; keeps focus and anything typed
+//   Panel.render()                            // re-render; keeps focus and anything typed, and
+//                                             // waits while a pointer is down
 //
 // Control's groups come in a fixed order; sections keep their script order.
 'use strict';
@@ -72,12 +76,12 @@ const Panel = (() => {
     } catch {
       if (S.conn !== 'down') {
         Object.assign(S, { conn: 'down', downAt: when(new Date()), retryMsg: '' });
-        render();
+        draw();
       }
       return null;
     }
     const data = await r.json().catch(() => ({}));
-    if (S.conn === 'down') { Object.assign(S, { conn: 'live', retryMsg: '' }); polls.forEach(p => { p.due = 0; }); render(); }
+    if (S.conn === 'down') { Object.assign(S, { conn: 'live', retryMsg: '' }); polls.forEach(p => { p.due = 0; }); draw(); }
     if (r.status === 401 && S.auth === 'in') signOut('Your session ended. Log in again.');
     return { ok: r.ok, status: r.status, data };
   }
@@ -245,8 +249,8 @@ const Panel = (() => {
       : '<button class="livebtn" type="button" data-act="pause" data-k="pause" aria-label="Pause live updates"><span class="dot" aria-hidden="true"></span>Live</button>';
   }
   const head = (title, where, live, first) => `<div class="bar"><div class="titles"><h2>${title}</h2><div class="sub">${esc(S.host)}</div></div>${live ? liveButton(first) : ''}</div>${extra(where)}`;
-  const detailHead = (view, title, sub, back) => `<div class="bar"><button class="back" type="button" data-act="close" data-k="back-${view}" aria-label="${back}">${I.back}</button>
-    <div class="titles"><h2>${esc(title)}</h2><div class="sub">${esc(sub)}</div></div></div>${extra(view === 'control' ? 'section' : view)}`;
+  const detailHead = (view, title, sub, back, below = extra('section')) => `<div class="bar"><button class="back" type="button" data-act="close" data-k="back-${view}" aria-label="${back}">${I.back}</button>
+    <div class="titles"><h2>${esc(title)}</h2><div class="sub">${esc(sub)}</div></div></div>${below}`;
   const sec = (title, inner, note = '') => `<section class="cg"><h3>${title}</h3>${note ? `<p class="note">${note}</p>` : ''}<div class="card">${inner}</div></section>`;
   const summary = s => { const r = s.summary?.() ?? ''; return Array.isArray(r) ? r : [r]; };
   const waits = s => { const n = s.wait?.() || 0; return n ? `<small class="wait">${plural(n, 'change waits', 'changes wait')} for a restart</small>` : ''; };
@@ -262,7 +266,7 @@ const Panel = (() => {
     const flash = S.flash ? `<div class="notice" role="status"><span>${esc(S.flash)}</span></div>` : '';
     $('.v-board .list-pane .scroll').innerHTML = head('Board', 'board', !!v, body == null) + flash + (body ?? loading(v.loading));
     const d = v && S.open.board != null && v.detail(S.open.board);
-    $('.v-board .thread-pane .scroll').innerHTML = d ? detailHead('board', d.title, d.sub, 'Back to the board') + d.html
+    $('.v-board .thread-pane .scroll').innerHTML = d ? detailHead('board', d.title, d.sub, 'Back to the board', banner('feature')) + d.html
       : body == null ? '' : '<div class="state"><b>Pick a feature</b><span>Its status, uptime, dependencies, incidents and log open here.</span></div>';
   }
   function renderServer() {
@@ -318,6 +322,7 @@ const Panel = (() => {
     S.flash = '';
     S.msg = {};
     if (v === 'control') sections.find(s => s.id === id)?.open?.();
+    else views[v]?.open?.(id);
     render();
     const bk = visible(`.v-${v} .back`);
     if (bk) bk.focus();
@@ -338,6 +343,17 @@ const Panel = (() => {
   };
   acts.retry = reconnect;
 
+  // A redraw between press and release would replace the pressed button and
+  // lose the click: a field that commits on change blurs first, and a poll
+  // can land too. So Panel.render waits for the release; the click lands,
+  // then it draws. Only a press on a control holds: a scrollbar drag may
+  // never send its release.
+  let down = false, held = false;
+  root.addEventListener('pointerdown', e => { down = !!e.target.closest('button, input, textarea, select, label, [data-act]'); });
+  const release = () => { down = false; if (held) { held = false; setTimeout(render); } };
+  ['pointerup', 'pointercancel', 'blur'].forEach(t => addEventListener(t, release));
+  const draw = () => { if (down) held = true; else render(); };
+
   root.addEventListener('click', e => {
     const b = e.target.closest('[data-act]');
     if (b && !b.disabled) acts[b.dataset.act]?.(b, e);
@@ -356,7 +372,7 @@ const Panel = (() => {
   document.addEventListener('DOMContentLoaded', boot);
 
   return {
-    S, I, acts, forms, banners, api, render, submit, field, formError, formOff, sec, loading,
+    S, I, acts, forms, banners, api, render: draw, submit, field, formError, formOff, sec, loading,
     view(id, page) { views[id] = page; },
     section(s) { sections.push(s); },
     poll(fn, ms = 5000) { polls.push({ fn, ms, due: 0 }); },
