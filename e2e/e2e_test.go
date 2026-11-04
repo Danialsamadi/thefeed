@@ -245,7 +245,7 @@ func composeUp(t *testing.T, from, to string, env []byte) {
 		exec.Command("docker", append([]string{"rmi"}, images...)...).Run()
 	})
 	run(t, "docker", "run", "-d", "--name", registryName, "-p", "127.0.0.1:5000:5000", "registry:2")
-	for i, args := range [][]string{{"--build-arg", "VERSION=" + from}, {"--build-arg", "VERSION=" + to}, {"-f", "../Dockerfile.admin"}} {
+	for i, args := range [][]string{{"--build-arg", "VERSION=" + from}, {"--build-arg", "VERSION=" + to}, {"--target", "admin"}} {
 		run(t, "docker", append(append([]string{"build", "-t", images[i]}, args...), "..")...)
 		run(t, "docker", "push", images[i])
 	}

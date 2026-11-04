@@ -22,7 +22,7 @@
 services:
   server:
     image: ${THEFEED_SERVER_IMAGE:-ghcr.io/sartoopjj/thefeed-server}:${THEFEED_SERVER_TAG:-latest}
-    # build: .
+    # build: { context: ., target: server }
     container_name: thefeed-server
     restart: unless-stopped
     ports:
@@ -32,7 +32,7 @@ services:
 
   admin:
     image: ${THEFEED_ADMIN_IMAGE:-ghcr.io/sartoopjj/thefeed-admin}:${THEFEED_ADMIN_TAG:-latest}
-    # build: { context: ., dockerfile: Dockerfile.admin }
+    # build: { context: ., target: admin }
     container_name: thefeed-admin
     restart: unless-stopped
     # Root on the host, as the systemd panel is: it controls the server
