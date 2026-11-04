@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -33,19 +34,35 @@ import (
 	"github.com/sartoopjj/thefeed/internal/serverconfig"
 )
 
-// Where install.sh puts thefeed, and where `make e2e` leaves its builds. The
-// suite runs as root from this directory.
-const (
+// Where install.sh puts thefeed. The compose setup moves them to its
+// project directory.
+var (
 	installDir = "/opt/thefeed"
 	dataDir    = installDir + "/data"
 	adminDir   = installDir + "/admin"
-	panelURL   = "https://127.0.0.1" // the panel's default :443, self-signed
-	buildDir   = "../build/e2e"
-	password   = "e2e-correct-horse-battery"
 )
 
+// Where `make e2e` leaves its builds; the suite runs as root from this
+// directory.
+const (
+	panelURL = "https://127.0.0.1" // the panel's default :443, self-signed
+	buildDir = "../build/e2e"
+	password = "e2e-correct-horse-battery"
+)
+
+// The compose setup's local registry, and its container.
+const (
+	registry     = "localhost:5000"
+	registryName = "thefeed-e2e-registry"
+)
+
+// TestE2E runs the flows in the setup E2E_SETUP names: script-docker (the
+// default) installs with install.sh and the panel in Docker, its default
+// answer; script-systemd the same with the panel as a systemd service; and
+// compose runs docker-compose.yml, the server and the panel as containers.
 func TestE2E(t *testing.T) {
-	preflight(t)
+	setup := cmp.Or(os.Getenv("E2E_SETUP"), "script-docker")
+	preflight(t, setup)
 	build, err := filepath.Abs(buildDir)
 	if err != nil {
 		t.Fatal(err)
@@ -62,13 +79,31 @@ func TestE2E(t *testing.T) {
 	release := httptest.NewServer(fakeRelease(to, map[string][]byte{asset: bin}))
 	t.Cleanup(release.Close)
 
-	install(t, build, release.URL)
+	data, err := os.ReadFile("testdata/thefeed.env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := serverconfig.ParseEnv(data)
+	env.Set("THEFEED_ADMIN_RELEASE_BASE_URL", release.URL)
+	switch setup {
+	case "script-systemd":
+		env.Set("THEFEED_ADMIN_DOCKER", "0")
+	case "compose":
+		env.Set("THEFEED_LISTEN", ":5300") // in the container; docker-compose.yml publishes it
+	}
+	if setup == "compose" {
+		composeUp(t, from, to, env.Bytes())
+	} else {
+		install(t, build, env.Bytes(), setup == "script-docker")
+	}
 	s := &suite{
-		p:      newPanel(),
-		domain: envValue(t, "THEFEED_DOMAIN"),
-		key:    envValue(t, "THEFEED_KEY"),
-		listen: envValue(t, "THEFEED_LISTEN"),
-		ctl:    controlapi.New(filepath.Join(dataDir, controlapi.SocketName)),
+		p:           newPanel(),
+		domain:      envValue(t, "THEFEED_DOMAIN"),
+		key:         envValue(t, "THEFEED_KEY"),
+		listen:      "127.0.0.1:5300", // testdata's THEFEED_LISTEN, or the port compose publishes
+		ctl:         controlapi.New(filepath.Join(dataDir, controlapi.SocketName)),
+		compose:     setup == "compose",
+		dockerPanel: setup != "script-systemd",
 	}
 	eventually(t, time.Minute, "the panel answers", func() (bool, string) {
 		code, raw, err := s.p.do(http.MethodGet, "/api/auth/setup", nil)
@@ -97,43 +132,42 @@ func TestE2E(t *testing.T) {
 }
 
 // preflight refuses anything but a disposable Linux host with systemd: the
-// suite installs into /opt/thefeed and deletes it afterwards.
-func preflight(t *testing.T) {
+// suite installs into /opt/thefeed, or runs thefeed's containers, and
+// deletes them afterwards.
+func preflight(t *testing.T, setup string) {
 	switch {
 	case runtime.GOOS != "linux":
 		t.Fatal("the e2e suite needs Linux with systemd")
 	case os.Geteuid() != 0:
 		t.Fatal("the e2e suite needs root: run it with make e2e")
+	case !slices.Contains([]string{"script-docker", "script-systemd", "compose"}, setup):
+		t.Fatalf("E2E_SETUP is %q; want script-docker, script-systemd or compose", setup)
 	}
 	if _, err := os.Stat("/run/systemd/system"); err != nil {
 		t.Fatal("systemd isn't running here (no /run/systemd/system)")
 	}
-	for _, p := range []string{installDir, "/etc/systemd/system/thefeed-server.service", "/etc/systemd/system/thefeed-admin.service"} {
+	paths := []string{"/etc/systemd/system/thefeed-server.service", "/etc/systemd/system/thefeed-admin.service"}
+	if setup != "compose" { // compose runs in a directory of its own
+		paths = append(paths, installDir)
+	}
+	for _, p := range paths {
 		if _, err := os.Stat(p); err == nil {
 			t.Fatalf("%s exists: the suite won't install over thefeed, or delete it afterwards", p)
 		}
 	}
+	for _, c := range []string{"thefeed-server", "thefeed-admin", registryName} {
+		if exec.Command("docker", "container", "inspect", c).Run() == nil {
+			t.Fatalf("a Docker container %s exists: the suite won't run over it, or delete it afterwards", c)
+		}
+	}
 }
 
-// install runs install.sh --local over testdata/thefeed.env plus the fake
-// release's address, and uninstalls when the test ends.
-func install(t *testing.T, build, release string) {
-	t.Cleanup(func() {
-		if t.Failed() {
-			out, _ := exec.Command("journalctl", "-u", "thefeed-server", "-u", "thefeed-admin", "--no-pager", "-n", "400").CombinedOutput()
-			t.Logf("journal:\n%s", out)
-		}
-		if out, err := exec.Command("bash", "../scripts/install.sh", "--uninstall").CombinedOutput(); err != nil {
-			t.Errorf("install.sh --uninstall: %v\n%s", err, out)
-		}
-		os.RemoveAll(installDir) // preflight saw none before
-	})
-	seed, err := os.ReadFile("testdata/thefeed.env")
+// seed writes thefeed.env and channels.txt into the data directory, as the
+// operator does before installing.
+func seed(t *testing.T, env []byte) {
+	err := os.MkdirAll(dataDir, 0o700)
 	if err == nil {
-		err = os.MkdirAll(dataDir, 0o700)
-	}
-	if err == nil {
-		err = os.WriteFile(filepath.Join(dataDir, "thefeed.env"), append(seed, "THEFEED_ADMIN_RELEASE_BASE_URL="+release+"\n"...), 0o600)
+		err = os.WriteFile(filepath.Join(dataDir, "thefeed.env"), env, 0o600)
 	}
 	if err == nil {
 		// thefeed-server won't start with nothing to serve. Not @durov: the
@@ -143,6 +177,35 @@ func install(t *testing.T, build, release string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// dumpLogs logs what thefeed wrote, for a failed run: the journal and the
+// containers' logs.
+func dumpLogs(t *testing.T) {
+	out, _ := exec.Command("journalctl", "-u", "thefeed-server", "-u", "thefeed-admin", "--no-pager", "-n", "400").CombinedOutput()
+	t.Logf("journal:\n%s", out)
+	for _, c := range []string{"thefeed-server", "thefeed-admin"} {
+		out, _ := exec.Command("docker", "logs", "-n", "400", c).CombinedOutput()
+		t.Logf("docker logs %s:\n%s", c, out)
+	}
+}
+
+// install runs install.sh --local over env as thefeed.env, and uninstalls
+// when the test ends. dockerPanel is whether the panel should end up as
+// the thefeed-admin container rather than the unit.
+func install(t *testing.T, build string, env []byte, dockerPanel bool) {
+	t.Cleanup(func() {
+		if t.Failed() {
+			dumpLogs(t)
+		}
+		if out, err := exec.Command("bash", "../scripts/install.sh", "--uninstall").CombinedOutput(); err != nil {
+			t.Errorf("install.sh --uninstall: %v\n%s", err, out)
+		}
+		// preflight saw neither before
+		os.RemoveAll(installDir)
+		exec.Command("docker", "rm", "-f", "thefeed-admin").Run()
+	})
+	seed(t, env)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "../scripts/install.sh", "--local", build)
@@ -155,22 +218,68 @@ func install(t *testing.T, build, release string) {
 		t.Fatalf("install.sh --local: %v\n%s", err, out)
 	}
 	t.Logf("install.sh --local:\n%s", out)
+	// install.sh falls back to the unit when Docker fails it.
+	_, err = os.Stat("/etc/systemd/system/thefeed-admin.service")
+	unit, container := err == nil, exec.Command("docker", "container", "inspect", "thefeed-admin").Run() == nil
+	if container != dockerPanel || unit == dockerPanel {
+		t.Fatalf("the panel got a container: %v, a unit: %v; want it in Docker: %v", container, unit, dockerPanel)
+	}
+}
+
+// composeUp runs thefeed as docker-compose.yml does, in a project directory
+// of its own: the server at version from and the panel, built from this
+// checkout and pushed to a local registry, which also holds the server at
+// version to. It takes it all down when the test ends.
+func composeUp(t *testing.T, from, to string, env []byte) {
+	dir := filepath.Join(t.TempDir(), "thefeed")
+	installDir, dataDir, adminDir = dir, dir+"/data", dir+"/admin"
+	images := []string{registry + "/thefeed-server:" + from, registry + "/thefeed-server:" + to, registry + "/thefeed-admin:e2e"}
+	t.Cleanup(func() {
+		if t.Failed() {
+			dumpLogs(t)
+		}
+		if out, err := exec.Command("docker", "compose", "--project-directory", dir, "down", "-v").CombinedOutput(); err != nil {
+			t.Errorf("docker compose down: %v\n%s", err, out)
+		}
+		exec.Command("docker", "rm", "-f", "-v", registryName).Run()
+		exec.Command("docker", append([]string{"rmi"}, images...)...).Run()
+	})
+	run(t, "docker", "run", "-d", "--name", registryName, "-p", "127.0.0.1:5000:5000", "registry:2")
+	for i, args := range [][]string{{"--build-arg", "VERSION=" + from}, {"--build-arg", "VERSION=" + to}, {"-f", "../Dockerfile.admin"}} {
+		run(t, "docker", append(append([]string{"build", "-t", images[i]}, args...), "..")...)
+		run(t, "docker", "push", images[i])
+	}
+	seed(t, env)
+	file, err := os.ReadFile("../docker-compose.yml")
+	if err == nil {
+		err = os.WriteFile(filepath.Join(dir, "docker-compose.yml"), file, 0o644)
+	}
+	if err == nil {
+		err = os.WriteFile(filepath.Join(dir, ".env"), []byte("THEFEED_SERVER_IMAGE="+registry+"/thefeed-server\nTHEFEED_SERVER_TAG="+from+
+			"\nTHEFEED_ADMIN_IMAGE="+registry+"/thefeed-admin\nTHEFEED_ADMIN_TAG=e2e\n"), 0o644)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, "chown", "-R", "1000:1000", dataDir) // the server container's user
+	run(t, "docker", "compose", "--project-directory", dir, "up", "-d")
 }
 
 type suite struct {
-	p                   *panel
-	domain, key, listen string
-	ctl                 controlapi.Client
+	p                    *panel
+	domain, key, listen  string
+	ctl                  controlapi.Client
+	compose, dockerPanel bool // the compose setup; the panel is the thefeed-admin container
 }
 
-// 1. The admin is made with the setup code from the journal, then logs in.
+// 1. The admin is made with the setup code from the panel's log, then logs in.
 func (s *suite) firstRun(t *testing.T) {
 	var setup struct{ Needed bool }
 	s.p.must(t, http.MethodGet, "/api/auth/setup", nil, &setup)
 	if !setup.Needed {
 		t.Fatal("a fresh install already has an admin")
 	}
-	code := setupCode(t)
+	code := s.setupCode(t)
 	s.p.must(t, http.MethodPost, "/api/auth/setup", map[string]string{"code": code, "username": "admin", "password": password, "repeat": password}, nil)
 	s.p.must(t, http.MethodPost, "/api/auth/logout", nil, nil)
 	if code := s.p.call(t, http.MethodGet, "/api/auth/session", nil, nil); code != http.StatusUnauthorized {
@@ -186,11 +295,15 @@ func (s *suite) firstRun(t *testing.T) {
 
 var setupCodeRE = regexp.MustCompile(`admin: setup code (\S+)`)
 
-func setupCode(t *testing.T) string {
+func (s *suite) setupCode(t *testing.T) string {
 	t.Helper()
 	var code string
-	eventually(t, 30*time.Second, "the setup code in the journal", func() (bool, string) {
-		out, err := exec.Command("journalctl", "-u", "thefeed-admin", "--no-pager", "-o", "cat").CombinedOutput()
+	eventually(t, 30*time.Second, "the setup code in the panel's log", func() (bool, string) {
+		log := exec.Command("journalctl", "-u", "thefeed-admin", "--no-pager", "-o", "cat")
+		if s.dockerPanel {
+			log = exec.Command("docker", "logs", "thefeed-admin")
+		}
+		out, err := log.CombinedOutput()
 		m := setupCodeRE.FindAllSubmatch(out, -1)
 		if len(m) == 0 {
 			return false, fmt.Sprintf("%v %s", err, out)
@@ -199,7 +312,7 @@ func setupCode(t *testing.T) string {
 		return true, ""
 	})
 	if file, _ := os.ReadFile(filepath.Join(adminDir, "setup-code")); strings.TrimSpace(string(file)) != code {
-		t.Fatalf("the journal's setup code is %s, %s/setup-code has %q", code, adminDir, file)
+		t.Fatalf("the log's setup code is %s, %s/setup-code has %q", code, adminDir, file)
 	}
 	return code
 }
@@ -212,10 +325,19 @@ func (s *suite) restart(t *testing.T) {
 	if v := st.get(t, "fetch.msgs"); v.Running == "" || v.Running == "20" {
 		t.Fatalf("fetch.msgs before: %+v, want it running at something other than 20", v)
 	}
-	pid := mainPID(t)
+	pid := s.mainPID(t)
 	s.p.must(t, http.MethodPatch, "/api/settings/fetch.msgs", map[string]any{"value": "20", "base": st.Base}, &st)
 	if v := st.get(t, "fetch.msgs"); v.Saved != "20" || !v.Waiting {
 		t.Fatalf("fetch.msgs after saving 20: %+v, want it waiting for a restart", v)
+	}
+	if s.compose {
+		fi, err := os.Stat(filepath.Join(dataDir, "thefeed.env"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uid := fi.Sys().(*syscall.Stat_t).Uid; uid != 1000 {
+			t.Fatalf("the panel left thefeed.env owned by uid %d; the server container runs as 1000", uid)
+		}
 	}
 	s.act(t, "restart", nil, "running")
 	eventually(t, time.Minute, "/status runs fetch.msgs 20", func() (bool, string) {
@@ -225,7 +347,7 @@ func (s *suite) restart(t *testing.T) {
 		}
 		return st.Server.Config["fetch.msgs"] == "20", "fetch.msgs " + st.Server.Config["fetch.msgs"]
 	})
-	if now := mainPID(t); now == pid || now == "0" {
+	if now := s.mainPID(t); now == pid || now == "0" {
 		t.Fatalf("thefeed-server's PID was %s before the restart and is %s after", pid, now)
 	}
 	s.p.must(t, http.MethodGet, "/api/settings", nil, &st)
@@ -236,7 +358,7 @@ func (s *suite) restart(t *testing.T) {
 
 // 3. A public channel applies live: the server reloads it, no restart.
 func (s *suite) publicChannel(t *testing.T) {
-	pid := mainPID(t)
+	pid := s.mainPID(t)
 	var st settingsState
 	s.p.must(t, http.MethodGet, "/api/settings", nil, &st)
 	var res struct {
@@ -251,7 +373,7 @@ func (s *suite) publicChannel(t *testing.T) {
 	if !slices.ContainsFunc(res.Lists["channels"].Items, func(it listItem) bool { return it.Name == "durov" && !it.Waiting }) {
 		t.Fatalf("@durov isn't running: %+v", res.Lists["channels"].Items)
 	}
-	if now := mainPID(t); now != pid {
+	if now := s.mainPID(t); now != pid {
 		t.Fatalf("thefeed-server restarted (PID %s, now %s); public channels apply live", pid, now)
 	}
 }
@@ -264,7 +386,11 @@ func (s *suite) answering(t *testing.T) {
 	}
 	s.act(t, "pause", nil, "paused")
 	s.unanswered(t)
-	run(t, "systemctl", "restart", "thefeed-admin")
+	if s.dockerPanel {
+		run(t, "docker", "restart", "thefeed-admin")
+	} else {
+		run(t, "systemctl", "restart", "thefeed-admin")
+	}
 	eventually(t, time.Minute, "the restarted panel still shows it paused", func() (bool, string) {
 		code, raw, err := s.p.do(http.MethodGet, "/api/service", nil)
 		var sv service
@@ -291,7 +417,8 @@ func (s *suite) stopStart(t *testing.T) {
 }
 
 // 6. Update to the fake release, checked against its SHA256SUMS, then roll
-// back to the version it replaced.
+// back to the version it replaced. In compose the release only names the
+// version: the image comes from the local registry, and .env keeps its tag.
 func (s *suite) update(t *testing.T, from, to string) {
 	var sv service
 	s.p.must(t, http.MethodGet, "/api/service", nil, &sv)
@@ -302,7 +429,9 @@ func (s *suite) update(t *testing.T, from, to string) {
 	if sv.Version != to || sv.Previous != from {
 		t.Fatalf("after the update: %+v, want %s running and %s kept", sv, to, from)
 	}
-	if v := version(t, filepath.Join(installDir, "thefeed-server.previous")); v != from {
+	if s.compose {
+		composeTag(t, to)
+	} else if v := version(t, filepath.Join(installDir, "thefeed-server.previous")); v != from {
 		t.Fatalf("thefeed-server.previous is %s, want %s", v, from)
 	}
 	sv = s.act(t, "rollback", nil, "running")
@@ -316,7 +445,9 @@ func (s *suite) update(t *testing.T, from, to string) {
 		}
 		return st.Server.Version == from, st.Server.Version
 	})
-	if v := version(t, filepath.Join(installDir, "thefeed-server")); v != from {
+	if s.compose {
+		composeTag(t, from)
+	} else if v := version(t, filepath.Join(installDir, "thefeed-server")); v != from {
 		t.Fatalf("the installed thefeed-server is %s after the rollback, want %s", v, from)
 	}
 }
@@ -528,9 +659,22 @@ func (s *suite) unanswered(t *testing.T) {
 	}
 }
 
-func mainPID(t *testing.T) string {
+// mainPID is thefeed-server's PID, 0 while it's stopped.
+func (s *suite) mainPID(t *testing.T) string {
 	t.Helper()
+	if s.compose {
+		return strings.TrimSpace(run(t, "docker", "inspect", "-f", "{{.State.Pid}}", "thefeed-server"))
+	}
 	return strings.TrimSpace(run(t, "systemctl", "show", "--property=MainPID", "--value", "thefeed-server"))
+}
+
+// composeTag checks compose's .env runs the server at tag.
+func composeTag(t *testing.T, tag string) {
+	t.Helper()
+	data, _, err := serverconfig.ReadFile(filepath.Join(installDir, ".env"))
+	if v, _ := serverconfig.ParseEnv(data).Get("THEFEED_SERVER_TAG"); err != nil || v != tag {
+		t.Fatalf(".env has THEFEED_SERVER_TAG=%s (%v), want %s", v, err, tag)
+	}
 }
 
 // version is what a thefeed-server binary says it is.
