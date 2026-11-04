@@ -19,6 +19,7 @@ import (
 	"github.com/sartoopjj/thefeed/internal/admin"
 	"github.com/sartoopjj/thefeed/internal/admin/logs"
 	"github.com/sartoopjj/thefeed/internal/admin/settings"
+	"github.com/sartoopjj/thefeed/internal/admin/sysmetrics"
 	"github.com/sartoopjj/thefeed/internal/admin/web"
 	"github.com/sartoopjj/thefeed/internal/version"
 )
@@ -27,6 +28,7 @@ import (
 var modules = []admin.Module{
 	logs.Module,
 	settings.Module,
+	sysmetrics.Module,
 	web.Module,
 }
 
