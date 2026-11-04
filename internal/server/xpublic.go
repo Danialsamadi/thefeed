@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/sartoopjj/thefeed/internal/protocol"
+	"github.com/sartoopjj/thefeed/internal/serverconfig"
 )
 
 // XPublicReader fetches public posts for X usernames via Nitter RSS endpoints.
@@ -104,22 +105,9 @@ func normalizeXRSSInstances(instancesCSV string) []string {
 	seen := make(map[string]struct{}, len(parts))
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		u := strings.TrimSpace(p)
-		if u == "" {
-			continue
-		}
-		parsed, err := url.Parse(u)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			continue
-		}
-		if parsed.Scheme != "http" && parsed.Scheme != "https" {
-			continue
-		}
-		if parsed.RawQuery != "" || parsed.Fragment != "" {
-			continue
-		}
-		base := parsed.Scheme + "://" + parsed.Host
-		if parsed.Path != "" && parsed.Path != "/" {
+		// The admin panel validates instances with this same parser.
+		base, err := serverconfig.ParseInstance(p)
+		if err != nil {
 			continue
 		}
 		if _, ok := seen[base]; ok {

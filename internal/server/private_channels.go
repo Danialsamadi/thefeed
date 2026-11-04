@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/gotd/td/tg"
 
 	"github.com/sartoopjj/thefeed/internal/protocol"
+	"github.com/sartoopjj/thefeed/internal/serverconfig"
 )
 
 // privateChannelID derives a short, stable channel ID from an invite
@@ -25,71 +25,6 @@ import (
 func privateChannelID(inviteHash string) string {
 	sum := sha256.Sum256([]byte(inviteHash))
 	return "pv:" + hex.EncodeToString(sum[:4])
-}
-
-// ParseInviteHash extracts the invite hash from any supported
-// invite-link shape: t.me/+HASH, t.me/joinchat/HASH, tg://join?invite=HASH,
-// or bare HASH (with or without leading +). Public-username URLs
-// (t.me/foo without + or joinchat/) are rejected.
-func ParseInviteHash(link string) (string, error) {
-	s := strings.TrimSpace(link)
-	if s == "" {
-		return "", fmt.Errorf("empty invite link")
-	}
-
-	// tg://join?invite=HASH or telegram://join?invite=HASH — capture
-	// the `invite=` param before any query-string stripping.
-	if lower := strings.ToLower(s); strings.HasPrefix(lower, "tg://") || strings.HasPrefix(lower, "telegram://") {
-		if i := strings.Index(s, "invite="); i >= 0 {
-			h := s[i+len("invite="):]
-			if j := strings.IndexAny(h, "&#"); j >= 0 {
-				h = h[:j]
-			}
-			return validateHash(h)
-		}
-		return "", fmt.Errorf("not an invite link: %q (tg://join requires ?invite=HASH)", link)
-	}
-
-	// Strip query / fragment and trailing slashes.
-	if i := strings.IndexAny(s, "?#"); i >= 0 {
-		s = s[:i]
-	}
-	s = strings.TrimRight(s, "/")
-
-	// Strip URL scheme.
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	s = strings.TrimPrefix(s, "www.")
-
-	// If a t.me-family host is present, require /+HASH or /joinchat/HASH
-	// after it. Anything else (e.g. t.me/publicchannel) is a public
-	// username and doesn't belong here.
-	for _, host := range []string{"t.me/", "telegram.me/", "telegram.dog/"} {
-		if strings.HasPrefix(s, host) {
-			rest := s[len(host):]
-			if strings.HasPrefix(rest, "+") {
-				return validateHash(rest[1:])
-			}
-			if strings.HasPrefix(rest, "joinchat/") {
-				return validateHash(rest[len("joinchat/"):])
-			}
-			return "", fmt.Errorf("not an invite link: %q (expected /+HASH or /joinchat/HASH after %s)", link, host)
-		}
-	}
-
-	// Bare form: +HASH or HASH (no URL host).
-	s = strings.TrimPrefix(s, "+")
-	return validateHash(s)
-}
-
-var inviteHashRE = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
-
-func validateHash(h string) (string, error) {
-	h = strings.TrimSpace(h)
-	if !inviteHashRE.MatchString(h) {
-		return "", fmt.Errorf("invalid invite hash %q (expected 8–64 chars of [A-Za-z0-9_-])", h)
-	}
-	return h, nil
 }
 
 // LoadPrivateInvites reads invite links from path (one per line, `#`
@@ -119,7 +54,7 @@ func LoadPrivateInvites(path string) ([]string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		hash, err := ParseInviteHash(line)
+		hash, err := serverconfig.ParseInviteHash(line)
 		if err != nil {
 			log.Printf("[server] private_channels.txt:%d: %v", lineNum, err)
 			continue
