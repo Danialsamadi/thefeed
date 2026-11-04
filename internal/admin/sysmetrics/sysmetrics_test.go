@@ -578,10 +578,56 @@ func TestGitHubFromStatus(t *testing.T) {
 		if g != c.want {
 			t.Errorf("%s: github = %q, want %q", c.name, g, c.want)
 		}
-		// thefeed-server's /status doesn't report these yet (ticket 03).
-		if string(got.Reach.Telegram) != "null" || string(got.Reach.Nitter) != "null" {
-			t.Errorf("%s: telegram %s, nitter %s; want null until /status has them", c.name, got.Reach.Telegram, got.Reach.Nitter)
+	}
+}
+
+func TestTelegramAndNitterFromStatus(t *testing.T) {
+	r := newRig(t)
+	at := time.Date(2026, 11, 4, 11, 58, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name                     string
+		mtproto                  *controlapi.MTProto
+		x                        *controlapi.X
+		wantTelegram, wantNitter string
+	}{
+		{"both off", nil, nil, "null", "null"},
+		{
+			// DC 3's last dial failed; DC 4 connected after an earlier
+			// failure, whose error it keeps; DC 5 was never dialled.
+			name: "telegram", mtproto: &controlapi.MTProto{DCs: []controlapi.DC{
+				{ID: 1, OK: true, DialMs: 120, At: at},
+				{ID: 2, OK: true, DialMs: 340, At: at},
+				{ID: 3, Error: "dial tcp 149.154.175.100:443: i/o timeout", DialMs: 15000, At: at, FailuresLastHour: 4},
+				{ID: 4, OK: true, Error: "connection reset by peer", DialMs: 210, At: at, FailuresLastHour: 1},
+				{ID: 5},
+			}},
+			wantTelegram: `{"reached":3,"of":5,"untried":1}`, wantNitter: "null",
+		},
+		{
+			// A fetch stops at the first instance that answers, so the third
+			// hasn't been tried.
+			name: "nitter", x: &controlapi.X{Accounts: 4, Instances: []controlapi.Instance{
+				{Host: "https://nitter.net", Error: "429 Too Many Requests", LatencyMs: 300, At: at},
+				{Host: "https://xcancel.com", OK: true, LatencyMs: 850, At: at},
+				{Host: "https://nitter.poast.org"},
+			}},
+			wantTelegram: "null", wantNitter: `{"reached":1,"of":3,"untried":1}`,
+		},
+		{"x on, no instances", nil, &controlapi.X{}, "null", `{"reached":0,"of":0,"untried":0}`},
+	} {
+		r.status.MTProto, r.status.X = c.mtproto, c.x
+		var got page
+		r.getJSON("/api/server", &got)
+		if string(got.Reach.Telegram) != c.wantTelegram || string(got.Reach.Nitter) != c.wantNitter {
+			t.Errorf("%s: telegram %s, nitter %s; want %s, %s", c.name, got.Reach.Telegram, got.Reach.Nitter, c.wantTelegram, c.wantNitter)
 		}
+	}
+	// Without thefeed-server there's nothing to say about either.
+	r.status = nil
+	var got page
+	r.getJSON("/api/server", &got)
+	if string(got.Reach.Telegram) != "null" || string(got.Reach.Nitter) != "null" {
+		t.Errorf("server down: telegram %s, nitter %s; want null, null", got.Reach.Telegram, got.Reach.Nitter)
 	}
 }
 
