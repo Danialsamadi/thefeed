@@ -461,6 +461,19 @@ func TestCtlCheckX(t *testing.T) {
 	}
 }
 
+// Every line of x_accounts.txt cleans to nothing: the reader runs, empty.
+func TestCtlCheckXNone(t *testing.T) {
+	c := startCtl(t, func(cfg *Config) {
+		if err := os.WriteFile(cfg.XAccountsFile, []byte("@\nx/\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	res := c.check(t, "x")
+	if res.OK || res.Summary != "there are no X accounts to check the instances with." {
+		t.Errorf("check = ok %v, %q; want not ok, \"there are no X accounts to check the instances with.\"", res.OK, res.Summary)
+	}
+}
+
 // A token not granted the repo: GitHub answers 403 with this message.
 func TestCtlCheckGH(t *testing.T) {
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
