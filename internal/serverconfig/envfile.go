@@ -109,8 +109,8 @@ var writeMu sync.Mutex
 
 // WriteFile replaces path with data, if the file still has the hash the
 // edit was based on; otherwise it returns ErrChangedElsewhere. The write is
-// atomic (temporary file, fsync, rename) and keeps the file's mode; a new
-// file gets 0600.
+// atomic (temporary file, fsync, rename) and keeps the file's mode and
+// owner; a new file gets 0600 and its directory's owner.
 func WriteFile(path string, data []byte, wantHash string) error {
 	writeMu.Lock()
 	defer writeMu.Unlock()
@@ -135,6 +135,9 @@ func WriteFile(path string, data []byte, wantHash string) error {
 	_, err = tmp.Write(data)
 	if err == nil {
 		err = tmp.Chmod(mode)
+	}
+	if err == nil {
+		err = chownLike(tmp.Name(), path)
 	}
 	if err == nil {
 		err = tmp.Sync()
