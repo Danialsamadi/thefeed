@@ -11,10 +11,11 @@
     render() {
       const pub = C.st.lists.channels.items, pv = C.st.lists.private.items, q = C.q.trim().toLowerCase().replace(/^@/, '');
       const shown = q ? pub.filter(it => it.name.toLowerCase().includes(q)) : pub;
+      const cy = Panel.feature?.('chan'), cycles = cy?.last ? `Last cycle started ${esc(cy.last)}, next at ${esc(cy.next)}. ` : '';
       const fetch = Panel.check ? `<button class="btn quiet" type="button" data-act="c-fetchall" data-k="fetchall"${fetching || S.conn !== 'live' ? ' disabled' : ''}>${fetching ? 'Fetching…' : 'Fetch all now'}</button>` : '';
       return Panel.sec('Add', Ctl.addForm('channels', 'Channel name or link', '@channel, t.me/channel or an invite link',
         'Public channels start fetching right away. Invite links go under Private channels and need a restart.'))
-        + Panel.sec(`Public channels, ${pub.length}`, `<div class="tools"><span>Changes here apply right away.</span>${fetch}</div>
+        + Panel.sec(`Public channels, ${pub.length}`, `<div class="tools"><span>${cycles}Changes here apply right away.</span>${fetch}</div>
           <div class="filter"><label class="hint" for="c-q">Find a channel</label><input class="inp" id="c-q" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(C.q)}" data-k="c-q"></div>
           ${Ctl.rows('channels', shown, q ? `No channel matches “${esc(C.q)}”. <button class="linkbtn" type="button" data-act="c-clearq" data-k="clearq">Clear the search</button>` : 'No public channels yet. Add one above.')}`)
         + Panel.sec(`Private channels, ${pv.length}`, Ctl.rows('private', pv, 'No private channels. Paste an invite link above to add one.'),

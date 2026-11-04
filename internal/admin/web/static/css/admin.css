@@ -19,7 +19,7 @@ html, body { height: 100%; background: #17212b; }
   --text: #f5f5f5; --dim: #8b9eb0; --accent: #3390ec; --accent-fill: #1f6fc5; --on-accent: #ffffff;
   --sel: #2b5278; --sel-dim: #c9d6e3;
   --ok: #4fae4e; --warn: #f0a830; --down: #ff6b66; --down-fill: #c62828; --warn-fill: #f0a830; --warn-fill-text: #17212b;
-  --track-on: #3e9a43; --track-off: #1d2b3a; --track-edge: #6b8299; --offbar: #5f6e7d;
+  --track-on: #3e9a43; --track-off: #1d2b3a; --track-edge: #6b8299; --offbar: #677686;
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   container: app / inline-size; height: 100dvh; position: relative; overflow: hidden;
   background: var(--bg); color: var(--text); font: 15px/1.45 "Vazirmatn", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -29,7 +29,7 @@ html, body { height: 100%; background: #17212b; }
   --text: #1a1a1a; --dim: #5f6468; --accent: #1f6fc5; --accent-fill: #1f6fc5;
   --sel: #d3eafe; --sel-dim: #3d4a57;
   --ok: #276a2b; --warn: #8a4f00; --down: #c62828; --down-fill: #c62828; --warn-fill: #a15c00; --warn-fill-text: #ffffff;
-  --track-on: #2e7d32; --track-off: #e8eaed; --track-edge: #8a9096; --offbar: #85898c;
+  --track-on: #2e7d32; --track-off: #e8eaed; --track-edge: #8a9096; --offbar: #808487;
 }
 /* Native parts (scrollbars, autofill) follow the theme too. */
 .app { color-scheme: dark; } .app[data-theme="light"] { color-scheme: light; }
