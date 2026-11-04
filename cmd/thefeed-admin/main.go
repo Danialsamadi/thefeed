@@ -18,12 +18,14 @@ import (
 
 	"github.com/sartoopjj/thefeed/internal/admin"
 	"github.com/sartoopjj/thefeed/internal/admin/logs"
+	"github.com/sartoopjj/thefeed/internal/admin/web"
 	"github.com/sartoopjj/thefeed/internal/version"
 )
 
 // modules is the app wiring: each feature module is one line here.
 var modules = []admin.Module{
 	logs.Module,
+	web.Module,
 }
 
 func main() {
