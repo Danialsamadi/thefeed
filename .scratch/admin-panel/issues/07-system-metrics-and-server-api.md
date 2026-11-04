@@ -1,6 +1,6 @@
 # 07 System metrics, reachability and the Server API
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02, 04
 Spec: `.scratch/admin-panel/spec.md`, section "System metrics and reachability (Linux only)" and the Panel JSON API's Server
 
