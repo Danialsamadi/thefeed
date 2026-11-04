@@ -39,3 +39,6 @@ Contracts other tickets rely on (2026-11-04):
 - A fork installs its own releases with `curl ... | sudo GITHUB_REPO=owner/repo bash`.
 - The settings table in `install.sh` must match `internal/serverconfig`: a new registry entry (e.g. 02's `THEFEED_CONTROL_SOCKET`) needs one row there, or `TestInstallScriptSettingsMatchRegistry` fails.
 - Not done: `.gitlab-ci.yml` doesn't build the panel (not in this ticket), so installs from the GitLab mirror skip it with a warning. Docker isn't changed: the panel needs systemd, the journal and root.
+- A run without `GITHUB_REPO` reuses the recorded `THEFEED_ADMIN_RELEASE_REPO`.
+- Rollback floor: servers before v0.40.1-rc0 don't read `THEFEED_NO_TELEGRAM`/`THEFEED_LISTEN` from env, so `--version` older than that runs badly under the flagless unit (the old unit is in `thefeed-server.service.bak` when one was migrated).
+- Ticket 14: install.sh has no way to install locally built binaries yet; 14 adds it.

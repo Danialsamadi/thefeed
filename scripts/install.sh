@@ -7,7 +7,9 @@ yellow='\033[0;33m'
 plain='\033[0m'
 
 # A fork installs its own releases with: curl ... | sudo GITHUB_REPO=owner/repo bash
-# The repo is saved as THEFEED_ADMIN_RELEASE_REPO, the panel's update source.
+# The repo is saved as THEFEED_ADMIN_RELEASE_REPO, the panel's update source,
+# and later runs without GITHUB_REPO reuse it (use_recorded_repo).
+REPO_GIVEN="${GITHUB_REPO:+1}"
 GITHUB_REPO="${GITHUB_REPO:-sartoopjj/thefeed}"
 INSTALL_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/install.sh"
 GITLAB_REPO="sartoopjj/thefeed"
@@ -293,6 +295,18 @@ env_set() {
 env_get() {
     local key="$1"
     grep "^${key}=" "$DATA_DIR/thefeed.env" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+# Unless GITHUB_REPO was given, installs from the repo the last install
+# recorded. The update command it prints carries no GITHUB_REPO, so without
+# this a fork's update would pull upstream's binaries and repoint the panel.
+use_recorded_repo() {
+    local repo
+    [[ -n "$REPO_GIVEN" ]] && return 0
+    repo=$(env_get THEFEED_ADMIN_RELEASE_REPO)
+    [[ -n "$repo" ]] || return 0
+    GITHUB_REPO="$repo"
+    INSTALL_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/install.sh"
 }
 
 # Helper: whether a setting is on, read the way the server reads it: 1, true,
@@ -1482,6 +1496,8 @@ while [[ $# -gt 0 ]]; do
             shift ;;
     esac
 done
+
+use_recorded_repo
 
 case "$ACTION" in
     help)

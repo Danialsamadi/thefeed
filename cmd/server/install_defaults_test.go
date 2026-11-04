@@ -48,10 +48,12 @@ func TestInstallScriptChatDefaultsMatchServer(t *testing.T) {
 }
 
 // installSh sources scripts/install.sh in bash and runs script after it, with
-// every path the installer writes inside a temp dir ($T) and systemctl
-// replaced by a function that records its arguments in $T/systemctl.log.
-// stdin answers the prompts. It returns $T.
-func installSh(t *testing.T, stdin, script string) string {
+// every path the installer writes inside a temp dir ($T), and systemctl and
+// ufw (reporting active) replaced by functions that record their arguments in
+// $T/systemctl.log and $T/ufw.log. stdin answers the prompts. The installer
+// sees none of the caller's THEFEED_*, TELEGRAM_*, SOURCE or GITHUB_REPO,
+// only env (KEY=value). It returns $T.
+func installSh(t *testing.T, stdin, script string, env ...string) string {
 	t.Helper()
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -68,11 +70,19 @@ INSTALL_DIR="$T/opt"; DATA_DIR="$T/opt/data"
 SERVICE_FILE="$T/thefeed-server.service"; ADMIN_SERVICE_FILE="$T/thefeed-admin.service"
 mkdir -p "$DATA_DIR"
 systemctl() { echo "$*" >> "$T/systemctl.log"; }
+ufw() { echo "$*" >> "$T/ufw.log"; [[ "$1" == status ]] && echo "Status: active"; return 0; }
 `
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bash, "-c", pre+script, "bash", src, dir)
 	cmd.Stdin = strings.NewReader(stdin)
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(k, "THEFEED_") && !strings.HasPrefix(k, "TELEGRAM_") && k != "SOURCE" && k != "GITHUB_REPO" {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, env...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -290,16 +300,39 @@ setup_config`)
 // it installed from, the panel's default update source (a fork sets
 // GITHUB_REPO). The panel unit reads both from thefeed.env.
 func TestInstallSavesPanelHostnameAndReleaseRepo(t *testing.T) {
-	t.Setenv("GITHUB_REPO", "fork/thefeed")
 	// As the fresh install above, with a panel hostname after the relays.
 	answers := "\n\n\nt.example.com\n\n\n\nsecret\n\n\n\n\n\npanel.example.com\n" + strings.Repeat("\n", 10)
-	dir := installSh(t, answers, `setup_config`)
+	dir := installSh(t, answers, `setup_config`, "GITHUB_REPO=fork/thefeed")
 	env := envFile(t, filepath.Join(dir, "opt", "data", "thefeed.env"))
 	if got := one(t, env, "THEFEED_ADMIN_HOSTNAME"); got != "panel.example.com" {
 		t.Errorf("THEFEED_ADMIN_HOSTNAME = %q, want panel.example.com", got)
 	}
 	if got := one(t, env, "THEFEED_ADMIN_RELEASE_REPO"); got != "fork/thefeed" {
 		t.Errorf("THEFEED_ADMIN_RELEASE_REPO = %q, want fork/thefeed", got)
+	}
+}
+
+// The update command the installer prints has no GITHUB_REPO in it, so a
+// later run without one stays on the recorded repo: it neither installs
+// upstream's binaries over a fork's nor moves the panel's update source.
+func TestInstallUpdateKeepsRecordedReleaseRepo(t *testing.T) {
+	dir := installSh(t, strings.Repeat("\n", 40), `cat > "$DATA_DIR/thefeed.env" <<'E'
+THEFEED_DOMAIN=t.example.com
+THEFEED_KEY=secret
+TELEGRAM_API_ID=0
+THEFEED_NO_TELEGRAM=1
+THEFEED_ADMIN_RELEASE_REPO=fork/thefeed
+E
+use_recorded_repo && setup_config
+SOURCE=github
+curl() { local a; for a; do :; done; echo "$a" > "$T/url"; : > "$2"; }
+download_binary v9.9.9 thefeed-admin`)
+	env := envFile(t, filepath.Join(dir, "opt", "data", "thefeed.env"))
+	if got := one(t, env, "THEFEED_ADMIN_RELEASE_REPO"); got != "fork/thefeed" {
+		t.Errorf("THEFEED_ADMIN_RELEASE_REPO = %q after an update, want fork/thefeed", got)
+	}
+	if url := readFile(t, filepath.Join(dir, "url")); !strings.HasPrefix(url, "https://github.com/fork/thefeed/releases/") {
+		t.Errorf("update downloads %s, not from the recorded fork/thefeed", url)
 	}
 }
 
@@ -345,6 +378,9 @@ func TestInstallWritesPanelUnit(t *testing.T) {
 	}
 	if !strings.Contains(readFile(t, filepath.Join(dir, "systemctl.log")), "daemon-reload") {
 		t.Error("systemd was not told to reload units")
+	}
+	if !strings.Contains(readFile(t, filepath.Join(dir, "ufw.log")), "allow 443/tcp\n") {
+		t.Error("an active ufw was not opened for 443/tcp")
 	}
 }
 
