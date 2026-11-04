@@ -10,7 +10,7 @@
         + Panel.sec('Limits', Ctl.num('mt.maxTunnels', 'Open tunnels at once', "0 means no limit; the server's open-file limit is then the ceiling")
           + Ctl.num('mt.idleMin', 'Close an idle tunnel after', 'Apps reopen it on their next use', 'min')
           + Ctl.num('mt.bufferKB', 'Buffer per tunnel', 'Memory each open tunnel uses', 'KB')
-          + Ctl.num('mt.downKBMin', 'Download speed per tunnel', '0 means no limit', 'KB/min')
+          + Ctl.num('mt.downKBMin', 'Download speed per tunnel', 'Most one app can pull through its tunnel', 'KB/min')
           + Ctl.num('mt.dialSec', 'Give up on a data centre after', '', 's'));
     },
   });

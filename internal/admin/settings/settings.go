@@ -179,7 +179,8 @@ func (f *files) saved(s serverconfig.Setting) string {
 }
 
 // canon is v as the server would run it, so "yes" and "true", "010" and
-// "10", or no Nitter instances and the server's two defaults compare equal.
+// "10", 0 and a ZeroIsDefault setting's default, or no Nitter instances and
+// the server's two defaults compare equal.
 func canon(s serverconfig.Setting, v string) string {
 	if v = strings.TrimSpace(v); v == "" {
 		v = s.Default
@@ -190,7 +191,9 @@ func canon(s serverconfig.Setting, v string) string {
 			return strconv.FormatBool(b)
 		}
 	case s.Type == serverconfig.TypeInt:
-		if n, err := strconv.Atoi(v); err == nil {
+		if n, err := strconv.Atoi(v); err == nil && n == 0 && s.ZeroIsDefault {
+			return s.Default
+		} else if err == nil {
 			return strconv.Itoa(n)
 		}
 	case s.Key == "xacc.instances" && v == "":
