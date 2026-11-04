@@ -37,6 +37,9 @@ func (m *mod) update(ctx context.Context, tag string) error {
 		return &refused{http.StatusBadRequest, admin.FieldError{Field: "version", Message: tag + " is older than " + floor + ", the oldest version that reads every setting from thefeed.env."}}
 	}
 	name, old := "Update to "+tag, m.version(ctx)
+	if m.Docker != nil {
+		return m.updateContainer(ctx, name, tag, old)
+	}
 	if err := m.fetch(ctx, m.source(m.load()), tag); err != nil {
 		return m.note(name, err)
 	}
@@ -63,6 +66,12 @@ func (m *mod) update(ctx context.Context, tag string) error {
 	if err == nil {
 		_, err = m.Systemd.Run(ctx, "restart", unit)
 	}
+	return m.rolledBack(name, tag, old, err)
+}
+
+// rolledBack ends an update to tag that wasn't healthy, once old is back;
+// err is putting it back failing.
+func (m *mod) rolledBack(name, tag, old string, err error) error {
 	if err != nil {
 		return m.note(name, fmt.Errorf("%s didn't answer healthy within %d seconds, and putting %s back failed: %v", tag, healthWait/time.Second, old, err))
 	}
@@ -82,6 +91,9 @@ func (m *mod) rollback(ctx context.Context) error {
 		return &refused{http.StatusConflict, admin.FieldError{Message: to + " is older than " + floor + ", the oldest version that reads every setting from thefeed.env, so the panel won't go back to it."}}
 	}
 	name := "Roll back to " + to
+	if m.Docker != nil {
+		return m.rollbackContainer(ctx, name, to)
+	}
 	if err := os.Rename(m.Binary+".previous", m.Binary); err != nil {
 		return m.note(name, err)
 	}

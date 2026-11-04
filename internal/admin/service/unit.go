@@ -95,6 +95,9 @@ func byFlag(name string) (serverconfig.Setting, bool) {
 // unit is kept as thefeed-server.service.bak in the data directory, as
 // install.sh does. Then systemd reloads it and the server restarts.
 func (m *mod) fixUnit(ctx context.Context) error {
+	if m.Docker != nil {
+		return noUnit
+	}
 	u, err := readUnit(m.Unit)
 	uses, rest := shadowing(u.words)
 	if err != nil || len(uses) == 0 {
