@@ -18,10 +18,15 @@
 // level is INFO, WARN or ERROR; feature is "" for lines that belong to no
 // feature page. Days are in the panel's time zone. next is "" when the
 // journal has nothing older.
+//
+// With THEFEED_ADMIN_SERVER=docker the lines come from the server
+// container's log instead, through the Docker Engine API, and next is
+// built from a line's time.
 package logs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +34,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -37,6 +43,7 @@ import (
 	"time"
 
 	"github.com/sartoopjj/thefeed/internal/admin"
+	"github.com/sartoopjj/thefeed/internal/admin/dockerapi"
 )
 
 // Journal reads thefeed-server's journal as `journalctl --output=json`
@@ -63,8 +70,15 @@ func (journalctl) Read(ctx context.Context, cursor string, n int) ([]byte, error
 	return out, err
 }
 
-// Module is the logs module on the real journal.
-func Module(d *admin.Deps) error { return New(journalctl{})(d) }
+// Module is the logs module on the real journal, or with
+// THEFEED_ADMIN_SERVER=docker on the log of the container
+// THEFEED_ADMIN_SERVER_CONTAINER (default thefeed-server).
+func Module(d *admin.Deps) error {
+	if os.Getenv("THEFEED_ADMIN_SERVER") == "docker" {
+		return New(Container(dockerapi.New("/var/run/docker.sock"), cmp.Or(os.Getenv("THEFEED_ADMIN_SERVER_CONTAINER"), "thefeed-server")))(d)
+	}
+	return New(journalctl{})(d)
+}
 
 // New is the logs module reading j.
 func New(j Journal) admin.Module {
