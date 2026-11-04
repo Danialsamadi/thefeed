@@ -1,7 +1,7 @@
 // Package dockerapi is a small client for the Docker Engine API: net/http
 // over the Engine's unix socket, in the Engine's own API version.
 // It makes only the calls the panel needs: container inspect, start, stop,
-// restart, update, create and remove, and image pull.
+// restart, update, create, remove and logs, and image pull.
 //
 // An Engine error is an *Error with the Engine's own message.
 package dockerapi
@@ -10,12 +10,15 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -64,6 +67,7 @@ type Container struct {
 	Config struct {
 		Image string   // as it was created from, such as ghcr.io/o/thefeed-server:v0.41.0
 		Env   []string // KEY=value
+		Tty   bool
 	}
 	HostConfig struct {
 		RestartPolicy struct{ Name string }
@@ -162,6 +166,74 @@ func (c *Client) Pull(ctx context.Context, repo, tag string) error {
 			return &Error{resp.StatusCode, msg}
 		}
 	}
+}
+
+// LogLine is a line of a container's log.
+type LogLine struct {
+	At   time.Time // when the container wrote it
+	Text string    // without its newline
+}
+
+// Logs reads the container name's log, stdout and stderr, oldest first:
+// the lines of its last tail messages. sent is how many messages the
+// Engine sent; fewer than tail means that's the whole log.
+func (c *Client) Logs(ctx context.Context, name string, tail int) (lines []LogLine, sent int, err error) {
+	ct, err := c.Inspect(ctx, name)
+	if err != nil {
+		return nil, 0, err
+	}
+	q := url.Values{"stdout": {"1"}, "stderr": {"1"}, "timestamps": {"1"}, "tail": {strconv.Itoa(tail)}}
+	resp, err := c.send(ctx, "GET", "/containers/"+url.PathEscape(name)+"/logs", q, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+	// A message is the time it was written (timestamps=1), a space and the
+	// line. A line over 16 KiB is several messages, all with the line's
+	// time and only the last with the newline.
+	//
+	// ponytail: with a TTY such a line keeps its later parts' times in its
+	// text; compose runs the server without one.
+	open := map[byte]int{} // stream → its line still to be finished, in lines
+	for ; len(body) > 0; sent++ {
+		// With a TTY, messages are lines, all on stdout.
+		stream, size := byte(1), bytes.IndexByte(body, '\n')+1
+		if size == 0 {
+			size = len(body)
+		}
+		// Without one, each is a frame: its stream, three zero bytes, its
+		// size (big-endian), then the message.
+		if !ct.Config.Tty {
+			if len(body) < 8 {
+				return nil, 0, io.ErrUnexpectedEOF
+			}
+			stream, size, body = body[0], int(binary.BigEndian.Uint32(body[4:8])), body[8:]
+		}
+		p := string(body[:min(size, len(body))])
+		body = body[len(p):]
+		ts, text, _ := strings.Cut(p, " ")
+		at, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return nil, 0, fmt.Errorf("Docker sent %q", strings.TrimSpace(p))
+		}
+		i, ok := open[stream]
+		if !ok {
+			i = len(lines)
+			lines = append(lines, LogLine{At: at})
+		}
+		lines[i].Text += text
+		if strings.HasSuffix(text, "\n") {
+			lines[i].Text = strings.TrimRight(lines[i].Text, "\r\n")
+			delete(open, stream)
+		} else {
+			open[stream] = i
+		}
+	}
+	return lines, sent, nil
 }
 
 // do sends a request and decodes the answer into out when it isn't nil.
