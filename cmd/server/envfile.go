@@ -2,10 +2,15 @@ package main
 
 import (
 	"bufio"
+	"errors"
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/sartoopjj/thefeed/internal/serverconfig"
 )
 
 // loadEnvFiles reads KEY=VALUE settings from the first file it finds, so a
@@ -89,11 +94,29 @@ func loadEnvFile(path string) (int, error) {
 // envBool reads a boolean setting: 1/true/yes/on or 0/false/no/off, in any
 // case. ok is false when it is unset or not one of those, so the flag stands.
 func envBool(name string) (v, ok bool) {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		return true, true
-	case "0", "false", "no", "off":
-		return false, true
+	return serverconfig.ParseBool(os.Getenv(name))
+}
+
+// checkSettings holds every setting to the registry the admin panel uses, so
+// a value the panel would refuse stops the server, instead of being quietly
+// replaced by a default. A flag typed on the command line is checked in
+// place of its env variable, since it wins. Empty means unset.
+func checkSettings(given map[string]bool, getenv func(string) string) error {
+	var errs []error
+	for _, s := range serverconfig.Settings {
+		name, v := s.Env, getenv(s.Env)
+		if given[s.Flag] {
+			name, v = "--"+s.Flag, flag.Lookup(s.Flag).Value.String()
+		}
+		if v == "" {
+			continue
+		}
+		if err := serverconfig.Validate(s.Key, v); err != nil {
+			if !s.Secret {
+				name += "=" + v
+			}
+			errs = append(errs, fmt.Errorf("%s: %v", name, err))
+		}
 	}
-	return false, false
+	return errors.Join(errs...)
 }
