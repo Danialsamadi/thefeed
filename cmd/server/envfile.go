@@ -99,23 +99,27 @@ func envBool(name string) (v, ok bool) {
 
 // checkSettings holds every setting to the registry the admin panel uses, so
 // a value the panel would refuse stops the server, instead of being quietly
-// replaced by a default. A flag typed on the command line is checked in
-// place of its env variable, since it wins. Empty means unset.
+// replaced by a default. A typed flag is checked, and its env value too:
+// several overlays apply the env value anyway, when the flag equals its
+// default or always. Empty means unset.
 func checkSettings(given map[string]bool, getenv func(string) string) error {
 	var errs []error
 	for _, s := range serverconfig.Settings {
-		name, v := s.Env, getenv(s.Env)
+		vals := [][2]string{{s.Env, getenv(s.Env)}}
 		if given[s.Flag] {
-			name, v = "--"+s.Flag, flag.Lookup(s.Flag).Value.String()
+			vals = append(vals, [2]string{"--" + s.Flag, flag.Lookup(s.Flag).Value.String()})
 		}
-		if v == "" {
-			continue
-		}
-		if err := serverconfig.Validate(s.Key, v); err != nil {
-			if !s.Secret {
-				name += "=" + v
+		for _, nv := range vals {
+			name, v := nv[0], nv[1]
+			if v == "" {
+				continue
 			}
-			errs = append(errs, fmt.Errorf("%s: %v", name, err))
+			if err := serverconfig.Validate(s.Key, v); err != nil {
+				if !s.Secret {
+					name += "=" + v
+				}
+				errs = append(errs, fmt.Errorf("%s: %v", name, err))
+			}
 		}
 	}
 	return errors.Join(errs...)

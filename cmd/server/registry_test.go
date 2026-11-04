@@ -156,7 +156,8 @@ func TestCheckSettingsRefusesWhatThePanelRefuses(t *testing.T) {
 	}
 }
 
-// A flag typed on the command line wins over env, so it is the one checked.
+// A typed flag is checked, and so is its env value: several overlays apply
+// the env value anyway, when the flag equals its default or always.
 func TestCheckSettingsChecksTheTypedFlag(t *testing.T) {
 	if flag.Lookup("fetch-interval") == nil {
 		flag.Int("fetch-interval", 10, "")
@@ -172,7 +173,9 @@ func TestCheckSettingsChecksTheTypedFlag(t *testing.T) {
 	if err := flag.Set("fetch-interval", "10"); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkSettings(given, envOf(map[string]string{"THEFEED_FETCH_INTERVAL": "2"})); err != nil {
-		t.Errorf("the env value the flag overrides was checked: %v", err)
+	// --fetch-interval=10 is the default, so the server applies the env's 2.
+	err = checkSettings(given, envOf(map[string]string{"THEFEED_FETCH_INTERVAL": "2"}))
+	if want := "THEFEED_FETCH_INTERVAL=2: Use a whole number from 3 to 1,440."; err == nil || err.Error() != want {
+		t.Errorf("got %v, want %q", err, want)
 	}
 }
