@@ -170,7 +170,7 @@ type Answering struct {
 }
 
 // CheckResult is POST /checks/{feature}. Feature ids are the panel's: x,
-// tg, chan, chat and gh. The feed and dnsm features have no check here.
+// tg, chat and gh. The feed, chan and dnsm features have no check here.
 type CheckResult struct {
 	OK      bool   `json:"ok"`
 	Summary string `json:"summary"` // one sentence for the operator

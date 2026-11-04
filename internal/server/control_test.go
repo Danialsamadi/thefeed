@@ -553,7 +553,7 @@ func TestCtlCheckChat(t *testing.T) {
 }
 
 // @news's page has no posts, so it counts as a failed fetch; @live has one.
-func TestCtlCheckChan(t *testing.T) {
+func TestCtlChannels(t *testing.T) {
 	c := startCtl(t, nil)
 	var ch *controlapi.Channels
 	waitFor(t, "the first fetch cycle", func() bool {
@@ -573,11 +573,11 @@ func TestCtlCheckChan(t *testing.T) {
 	if err := c.api.ReloadChannels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	res := c.check(t, "chan")
-	if res.OK || res.Summary != "1 of 2 channels fetched, 1 post." {
-		t.Errorf("check = ok %v, %q; want not ok, \"1 of 2 channels fetched, 1 post.\"", res.OK, res.Summary)
-	}
-	cycles := c.status(t).Channels.Cycles
+	var cycles []controlapi.FetchCycle
+	waitFor(t, "the fetch cycle after reload", func() bool {
+		cycles = c.status(t).Channels.Cycles
+		return len(cycles) == 2
+	})
 	if cy := cycles[len(cycles)-1]; cy.Fetched != 1 || cy.Total != 2 || cy.Posts != 1 {
 		t.Errorf("last cycle = %+v, want 1 of 2 channels fetched, 1 post", cy)
 	}
