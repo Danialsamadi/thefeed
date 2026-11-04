@@ -141,6 +141,21 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
           go build -trimpath -ldflags="${LDFLAGS}" -o build/thefeed-server-${{ matrix.goos }}-${{ matrix.goarch }}${ext} ./cmd/server
 
+      # The admin panel runs beside the server under systemd, so Linux only.
+      # install.sh downloads it by this name.
+      - name: Build Admin
+        if: matrix.goos == 'linux'
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          VERSION="${{ github.ref_type == 'tag' && github.ref_name || '0.0.1' }}"
+          COMMIT=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-s -w -X github.com/sartoopjj/thefeed/internal/version.Version=${VERSION} -X github.com/sartoopjj/thefeed/internal/version.Commit=${COMMIT} -X github.com/sartoopjj/thefeed/internal/version.Date=${DATE}"
+          go build -trimpath -ldflags="${LDFLAGS}" -o build/thefeed-admin-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/thefeed-admin
+
       - name: Build Client
         env:
           TEL_API_ID: ${{ secrets.TEL_API_ID }}
@@ -469,6 +484,16 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # One "<sha256>  <name>" line per asset, hashed as published (after
+      # UPX). The admin panel refuses an update whose file doesn't match.
+      # The glob expands before the redirect creates the file, so it never
+      # lists itself.
+      - name: Checksums (SHA256SUMS)
+        working-directory: artifacts
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
