@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -34,8 +35,9 @@ type DNSServer struct {
 	responseKey  [protocol.KeySize]byte
 	listenAddr   string
 	maxPadding   int
-	allowManage  bool   // if true, admin/send commands are accepted
-	channelsFile string // path to channels.txt for admin commands
+	allowManage  bool     // if true, admin/send commands are accepted
+	channelsFile string   // path to channels.txt for admin commands
+	privateIDs   []string // feed names of the private channels, set by Server.Run
 	xAccounts    []string
 
 	sessionsMu sync.Mutex
@@ -55,6 +57,9 @@ type DNSServer struct {
 	reportCh   chan reportEvent
 	reportFile *reportFile // optional rotating JSONL sink for the report TUI
 	debug      bool
+
+	counts queryCounts // since start, for the control endpoint
+	paused atomic.Bool // answering off; see setAnswering
 }
 
 type channelFetchStats struct {
@@ -325,7 +330,13 @@ func (s *DNSServer) ListenAndServe(ctx context.Context) error {
 	}
 	server := &dns.Server{
 		PacketConn: pc,
-		Handler:    mux,
+		// Paused is checked ahead of the mux, which would otherwise still
+		// refuse queries for zones it doesn't serve.
+		Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+			if !s.paused.Load() {
+				mux.ServeDNS(w, r)
+			}
+		}),
 	}
 
 	go func() {
@@ -838,18 +849,9 @@ func (s *DNSServer) adminAddChannel(username string) (string, error) {
 
 	log.Printf("[admin] added channel @%s", username)
 
-	all, err := loadChannelsFromFile(s.channelsFile)
-	if err == nil {
-		s.feed.SetChannels(combineDisplayChannels(all, s.xAccounts))
-		if s.xReader != nil {
-			s.xReader.SetBaseCh(len(all) + 1)
-		}
-		if s.channelCtl != nil {
-			s.channelCtl.UpdateChannels(all)
-			s.channelCtl.RequestRefresh()
-		}
+	if err := s.reloadChannels(); err != nil {
+		log.Printf("[admin] apply channels: %v", err)
 	}
-
 	return "OK", nil
 }
 
@@ -889,16 +891,35 @@ func (s *DNSServer) adminRemoveChannel(username string) (string, error) {
 
 	log.Printf("[admin] removed channel @%s", username)
 
-	s.feed.SetChannels(combineDisplayChannels(remaining, s.xAccounts))
+	s.applyChannels(remaining)
+	return "OK", nil
+}
+
+// reloadChannels re-reads channels.txt and applies it.
+func (s *DNSServer) reloadChannels() error {
+	all, err := loadChannelsFromFile(s.channelsFile)
+	if err != nil {
+		return fmt.Errorf("read channels: %w", err)
+	}
+	s.applyChannels(all)
+	return nil
+}
+
+// applyChannels makes channels the public channel list the feed serves and
+// the reader fetches, live. Every change to channels.txt goes through here.
+//
+// The feed's slots are public channels, then private ones, then X (see
+// Server.New), so the private slots and X's base move with the public count.
+func (s *DNSServer) applyChannels(channels []string) {
+	names := append(append([]string{}, channels...), s.privateIDs...)
+	s.feed.SetChannels(combineDisplayChannels(names, s.xAccounts))
 	if s.xReader != nil {
-		s.xReader.SetBaseCh(len(remaining) + 1)
+		s.xReader.SetBaseCh(len(names) + 1)
 	}
 	if s.channelCtl != nil {
-		s.channelCtl.UpdateChannels(remaining)
+		s.channelCtl.UpdateChannels(channels)
 		s.channelCtl.RequestRefresh()
 	}
-
-	return "OK", nil
 }
 
 func (s *DNSServer) adminListChannels() (string, error) {
@@ -986,6 +1007,7 @@ func (s *DNSServer) runHourlyReports(ctx context.Context) {
 			return
 		case event := <-s.reportCh:
 			recordReportQuery(rep, event)
+			s.counts.record(event, time.Now())
 		case <-ticker.C:
 			s.emitHourlyReport(rep, false)
 			rep = newHourlyFetchReport(time.Now())

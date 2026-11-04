@@ -46,6 +46,9 @@ type ChatStore struct {
 	// dirty tracks accounts whose RAM state is newer than disk (periodic mode).
 	dirtyMu sync.Mutex
 	dirty   map[[protocol.AddressSize]byte]struct{}
+
+	errMu sync.Mutex
+	errs  window // disk and decode errors, in 10s slots: the last 10 minutes
 }
 
 type chatShard struct {
@@ -131,7 +134,7 @@ func OpenChatStore(path string, limits protocol.ChatLimits) (*ChatStore, error) 
 		db.Close()
 		return nil, fmt.Errorf("chatstore bucket: %w", err)
 	}
-	s := &ChatStore{db: db, limits: limits, dirty: make(map[[protocol.AddressSize]byte]struct{})}
+	s := &ChatStore{db: db, limits: limits, dirty: make(map[[protocol.AddressSize]byte]struct{}), errs: window{step: 10 * time.Second}}
 	for i := range s.shards {
 		s.shards[i].hot = make(map[[protocol.AddressSize]byte]*chatHotEntry)
 	}
@@ -190,6 +193,58 @@ func (s *ChatStore) RunSync(ctx context.Context) {
 // AccountCount returns the number of stored accounts.
 func (s *ChatStore) AccountCount() int { return int(s.accountCount.Load()) }
 
+// failed counts err, if there is one, as a store error, and returns it.
+func (s *ChatStore) failed(err error) error {
+	if err != nil {
+		s.errMu.Lock()
+		s.errs.add(time.Now())
+		s.errMu.Unlock()
+	}
+	return err
+}
+
+// recentErrors is how many store errors there were in the last 10 minutes.
+func (s *ChatStore) recentErrors(now time.Time) int64 {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.errs.sum(now)
+}
+
+// Waiting counts the messages stored and not picked up yet.
+//
+// ponytail: reads every account, O(accounts) per call, about what a sweep
+// costs; keep a running count if status calls get slow on a big store.
+func (s *ChatStore) Waiting() int {
+	n := 0
+	hot := map[[protocol.AddressSize]byte]bool{}
+	for i := range s.shards {
+		sh := &s.shards[i]
+		sh.mu.Lock()
+		for addr, e := range sh.hot {
+			hot[addr] = true
+			n += len(e.acc.Inbox)
+		}
+		sh.mu.Unlock()
+	}
+	// A cached account may be newer than its copy on disk, so disk only
+	// counts for the rest.
+	s.failed(s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(chatAccountsBucket).ForEach(func(k, v []byte) error {
+			if len(k) != protocol.AddressSize || hot[[protocol.AddressSize]byte(k)] {
+				return nil
+			}
+			var acc struct {
+				Inbox []json.RawMessage `json:"inbox"`
+			}
+			if json.Unmarshal(v, &acc) == nil {
+				n += len(acc.Inbox)
+			}
+			return nil
+		})
+	}))
+	return n
+}
+
 // Close writes any dirty accounts (periodic mode) and closes the file.
 func (s *ChatStore) Close() error {
 	if s.syncEvery > 0 {
@@ -243,7 +298,7 @@ func (s *ChatStore) loadLocked(addr [protocol.AddressSize]byte, now time.Time) (
 		return json.Unmarshal(raw, acc)
 	})
 	if err != nil {
-		return nil, err
+		return nil, s.failed(err)
 	}
 	if acc == nil {
 		return nil, nil
@@ -283,7 +338,7 @@ func (s *ChatStore) putLocked(now time.Time, accs map[[protocol.AddressSize]byte
 		return nil
 	})
 	if err != nil {
-		return err
+		return s.failed(err)
 	}
 	for addr, acc := range accs {
 		s.shardFor(addr).hot[addr] = &chatHotEntry{acc: acc, lastUsed: now}
@@ -348,7 +403,7 @@ func (s *ChatStore) flushDirty() (int, error) {
 			s.dirty[e.addr] = struct{}{}
 		}
 		s.dirtyMu.Unlock()
-		return 0, err
+		return 0, s.failed(err)
 	}
 	return len(raws), nil
 }
@@ -809,7 +864,7 @@ func (s *ChatStore) Sweep(now time.Time) (expiredMsgs, deletedAccounts int, err 
 		return nil
 	})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, s.failed(err)
 	}
 	// Drop any swept account from RAM so stale inboxes aren't served — except
 	// entries dirtied during the disk pass: their RAM state is newer than what

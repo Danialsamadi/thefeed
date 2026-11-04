@@ -1,6 +1,6 @@
 # 02 thefeed-server control endpoint: status, reload, refresh, answering
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 Spec: `.scratch/admin-panel/spec.md`, section "thefeed-server's local control endpoint (new)"
 

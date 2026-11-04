@@ -44,6 +44,8 @@ type ChatService struct {
 	// stays at or near zero; a rising count means duplicates are arriving
 	// very late, which is worth seeing in the report.
 	statStaleCells atomic.Int64
+
+	today chatToday // for the control endpoint; never reset by the hourly report
 }
 
 type chatSession struct {
@@ -616,6 +618,7 @@ func (c *ChatService) handleInContext(sess *chatSession, selector [protocol.Chat
 		// Bad seal — corruption or a stale selector collision; ask to re-handshake.
 		return protocol.ChatSessionLostResp
 	}
+	c.today.do(now, func() { c.today.active[sess.account] = struct{}{} })
 
 	// Per-session lock serializes ops so that concurrent retransmits (the same
 	// cell scattered across resolvers) cannot race past the cache check and
@@ -856,6 +859,9 @@ func (c *ChatService) opSendStart(sess *chatSession, pt []byte, budget int, resp
 	if err != nil {
 		return resp(protocol.ChatStatusBusy, nil)
 	}
+	if status == protocol.ChatStatusInboxFull {
+		c.today.do(now, func() { c.today.inboxFull++ })
+	}
 	if status != protocol.ChatStatusOK {
 		return resp(status, appendQuota(nil, remaining, reset))
 	}
@@ -946,8 +952,12 @@ func (c *ChatService) opFin(sess *chatSession, pt []byte, resp func(byte, []byte
 	if err != nil {
 		return resp(protocol.ChatStatusBusy, nil)
 	}
-	if status == protocol.ChatStatusOK {
+	switch status {
+	case protocol.ChatStatusOK:
 		c.statCommits.Add(1)
+		c.today.do(now, func() { c.today.messages++ })
+	case protocol.ChatStatusInboxFull:
+		c.today.do(now, func() { c.today.inboxFull++ })
 	}
 	body := make([]byte, 4)
 	binary.BigEndian.PutUint32(body, lastAccepted)

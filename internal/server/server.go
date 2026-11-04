@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
 )
 
@@ -74,6 +75,13 @@ type Config struct {
 	MTProtoDownKBPerMin int
 	MTProtoDialTimeout  time.Duration
 	MTProtoTestDCs      bool // dial Telegram's test DCs
+
+	// ControlSocket serves the admin panel's control endpoint on
+	// <DataDir>/control.sock. Effective is what its status reports as the
+	// running configuration: serverconfig registry key -> value as
+	// thefeed.env would write it. Secrets in it are never reported.
+	ControlSocket bool
+	Effective     map[string]string
 }
 
 // GitHubRelayConfig configures the GitHub fast relay. Active() requires
@@ -422,6 +430,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	dnsServer := NewDNSServer(s.cfg.ListenAddr, s.cfg.Domain, s.feed, queryKey, responseKey, maxPad, s.reader, s.cfg.AllowManage, s.cfg.ChannelsFile, s.xAccounts, s.cfg.Debug)
 	dnsServer.SetExtraDomains(s.cfg.ExtraDomains)
+	for _, hash := range s.privateInvites {
+		dnsServer.privateIDs = append(dnsServer.privateIDs, privateChannelID(hash))
+	}
 	if err := dnsServer.SetReportFile(filepath.Join(s.cfg.DataDir, "dns_hourly.jsonl")); err != nil {
 		log.Printf("[server] report file disabled: %v", err)
 	}
@@ -441,6 +452,18 @@ func (s *Server) Run(ctx context.Context) error {
 	if xReader != nil {
 		dnsServer.AddRefresher(xReader)
 		dnsServer.SetXReader(xReader)
+	}
+	if s.cfg.ControlSocket {
+		// The panel can't reach a server without it, but a feed that still
+		// answers beats one that won't start, so this isn't fatal.
+		path := filepath.Join(s.cfg.DataDir, controlapi.SocketName)
+		c := &control{dns: dnsServer, started: time.Now(), effective: s.cfg.Effective}
+		if stop, err := serveControl(path, c.handler()); err != nil {
+			log.Printf("[control] socket off: %v", err)
+		} else {
+			defer stop()
+			log.Printf("[control] listening on %s", path)
+		}
 	}
 	return dnsServer.ListenAndServe(ctx)
 }
