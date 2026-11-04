@@ -63,6 +63,22 @@ function groupSections(sections, order) {
   return groups.map(g => [g, sections.filter(s => s.group === g)]);
 }
 
+// svcWords is how Service and power words what it manages, from GET
+// /api/service: thefeed-server as a systemd unit, or as a Docker container.
+function svcWords(svc) {
+  const docker = svc.server === 'docker';
+  return {
+    title: `${docker ? 'Container' : 'Service'} ${esc(svc.name)}`,
+    boot: docker ? 'Start with Docker' : 'Start when the machine boots',
+    // restart policy unless-stopped: a container stopped by hand stays stopped
+    bootOn: docker ? 'Docker starts it after a reboot, unless you stopped it.' : 'systemd starts it after a reboot.',
+    shadow: docker ? 'Settings in docker-compose.yml' : 'Settings passed as flags',
+    shadowWhy: docker
+      ? "thefeed-server's container gets these from docker-compose.yml, and they beat thefeed.env, so changes made here to them don't apply. Remove them from docker-compose.yml, then run <code>docker compose up -d</code>."
+      : "thefeed-server's systemd unit passes these, and a flag beats thefeed.env, so changes made here to them don't apply.",
+  };
+}
+
 // esc makes any value safe to put in HTML text or a quoted attribute.
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
