@@ -1,10 +1,13 @@
 package admin
 
 import (
+	"cmp"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 
+	"github.com/sartoopjj/thefeed/internal/admin/dockerapi"
 	"github.com/sartoopjj/thefeed/internal/serverconfig"
 )
 
@@ -23,4 +26,32 @@ func HostCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 		name = "nsenter"
 	}
 	return exec.CommandContext(ctx, name, args...)
+}
+
+// ResetCommand is the one-liner, run on the host, that resets the admin
+// account: the panel holds its database's lock, so it stops for it.
+func ResetCommand() string {
+	if InContainer() {
+		return "docker stop thefeed-admin && docker run --rm --volumes-from thefeed-admin $(docker inspect -f '{{.Config.Image}}' thefeed-admin) reset-admin && docker start thefeed-admin"
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "thefeed-admin"
+	}
+	return "systemctl stop thefeed-admin && " + exe + " reset-admin && systemctl start thefeed-admin"
+}
+
+// ServerContainer is how thefeed-server runs, from THEFEED_ADMIN_SERVER:
+// with docker, the Docker Engine on /var/run/docker.sock and the server's
+// container, THEFEED_ADMIN_SERVER_CONTAINER (default thefeed-server); with
+// systemd, the default, a nil client.
+func ServerContainer() (*dockerapi.Client, string, error) {
+	switch v := os.Getenv("THEFEED_ADMIN_SERVER"); v {
+	case "", "systemd":
+		return nil, "", nil
+	case "docker":
+		return dockerapi.New("/var/run/docker.sock"), cmp.Or(os.Getenv("THEFEED_ADMIN_SERVER_CONTAINER"), "thefeed-server"), nil
+	default:
+		return nil, "", fmt.Errorf("THEFEED_ADMIN_SERVER is %q; want systemd or docker", v)
+	}
 }

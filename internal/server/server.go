@@ -459,7 +459,7 @@ func (s *Server) Run(ctx context.Context) error {
 		// The panel can't reach a server without it, but a feed that still
 		// answers beats one that won't start, so this isn't fatal.
 		path := filepath.Join(s.cfg.DataDir, controlapi.SocketName)
-		c := &control{dns: dnsServer, started: time.Now(), effective: s.cfg.Effective}
+		c := &control{dns: dnsServer, started: time.Now(), effective: s.cfg.Effective, invites: s.privateInvites}
 		if stop, err := serveControl(path, c.handler()); err != nil {
 			log.Printf("[control] socket off: %v", err)
 		} else {

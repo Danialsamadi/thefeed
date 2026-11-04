@@ -6,7 +6,11 @@ func TestValidate(t *testing.T) {
 	for _, c := range []struct{ key, value, want string }{
 		{"chat.sendPerHour", "30", ""},
 		{"chat.sendPerHour", " 65535 ", ""},
-		{"chat.sendPerHour", "0", "Use a whole number from 1 to 65,535."},
+		// The server has always read 0 here as the default.
+		{"chat.sendPerHour", "0", ""},
+		{"chat.sendPerHour", "-1", "Use a whole number from 1 to 65,535."},
+		{"fetch.every", "0", ""},
+		{"mt.dialSec", "0", ""},
 		{"chat.sendPerHour", "", "Use a whole number from 1 to 65,535."},
 		{"chat.sendPerHour", "3.5", "Use a whole number from 1 to 65,535."},
 		{"media.dnsTTLMin", "525601", "Use a whole number from 1 to 525,600."},

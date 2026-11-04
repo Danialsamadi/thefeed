@@ -134,7 +134,7 @@ func TestCheckSettingsAcceptsInstallerEnv(t *testing.T) {
 // dropped for the default without a word.
 func TestCheckSettingsRefusesWhatThePanelRefuses(t *testing.T) {
 	for _, c := range [][3]string{
-		{"THEFEED_CHAT_SEND_PER_HOUR", "0", "Use a whole number from 1 to 65,535."},
+		{"THEFEED_CHAT_SEND_PER_HOUR", "-1", "Use a whole number from 1 to 65,535."},
 		{"THEFEED_FETCH_INTERVAL", "2", "Use a whole number from 3 to 1,440."},
 		{"THEFEED_MSG_LIMIT", "lots", "Use a whole number from 1 to 100."},
 		{"THEFEED_NO_TELEGRAM", "maybe", "Use true or false."},
@@ -148,9 +148,9 @@ func TestCheckSettingsRefusesWhatThePanelRefuses(t *testing.T) {
 			t.Errorf("got %v, want %q", err, want)
 		}
 	}
-	// 0 means "no limit" or "write at once" for these, so it is accepted.
+	// Older servers read 0 in env as the default, so a server set up that way must still start.
 	if err := checkSettings(map[string]bool{}, envOf(map[string]string{
-		"THEFEED_CHAT_SYNC_SECONDS": "0", "THEFEED_MTPROTO_DOWN_KB_PER_MIN": "0",
+		"THEFEED_CHAT_SEND_PER_HOUR": "0", "THEFEED_CHAT_SYNC_SECONDS": "0", "THEFEED_MTPROTO_DOWN_KB_PER_MIN": "0",
 	})); err != nil {
 		t.Error(err)
 	}

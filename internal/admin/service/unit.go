@@ -104,7 +104,7 @@ func (m *mod) fixUnit(ctx context.Context) error {
 		return &refused{http.StatusConflict, admin.FieldError{Message: "thefeed-server's unit passes no settings as flags."}}
 	}
 	const name = "Move the unit's flags into thefeed.env"
-	envPath := filepath.Join(m.d.ServerDataDir, "thefeed.env")
+	envPath := admin.EnvFile(m.d.ServerDataDir)
 	data, hash, err := serverconfig.ReadFile(envPath)
 	if err != nil {
 		return m.note(name, err)

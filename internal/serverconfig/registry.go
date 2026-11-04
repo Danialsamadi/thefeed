@@ -36,7 +36,10 @@ type Setting struct {
 	Page     string // Control page id; "" when the panel doesn't show it
 	Applies  string // "live" or "restart"
 	Secret   bool   // never shown or returned
-	check    func(string) error
+	// ZeroIsDefault: 0 in thefeed.env means the default, as the server has
+	// always read it, so 0 is valid whatever Min is.
+	ZeroIsDefault bool
+	check         func(string) error
 }
 
 func num(key, env, flag, page string, min, max, def int) Setting {
@@ -56,6 +59,8 @@ func list(key, env, flag, page string, item func(string) error) Setting {
 }
 
 func secret(s Setting) Setting { s.Secret = true; return s }
+
+func zeroIsDefault(s Setting) Setting { s.ZeroIsDefault = true; return s }
 
 // Settings holds every server flag that has an env equivalent, which is all
 // of them except --env-file and the one-shot actions (--login-only,
@@ -87,8 +92,8 @@ var Settings = []Setting{
 	// EncodeResponse draws the padding from one random byte, so 255 is the most it adds.
 	num("dns.padding", "THEFEED_PADDING", "padding", "dns", 0, 255, 32),
 	// Telegram returns at most 100 messages a request.
-	num("fetch.msgs", "THEFEED_MSG_LIMIT", "msg-limit", "fetch", 1, 100, 15),
-	num("fetch.every", "THEFEED_FETCH_INTERVAL", "fetch-interval", "fetch", 3, 1440, 10),
+	zeroIsDefault(num("fetch.msgs", "THEFEED_MSG_LIMIT", "msg-limit", "fetch", 1, 100, 15)),
+	zeroIsDefault(num("fetch.every", "THEFEED_FETCH_INTERVAL", "fetch-interval", "fetch", 3, 1440, 10)),
 	onOff("dns.manage", "THEFEED_ALLOW_MANAGE", "allow-manage", "dns", false),
 	onOff("dns.debug", "THEFEED_DEBUG", "debug", "dns", false),
 	onOff("media.dnsOn", "THEFEED_DNS_MEDIA_ENABLED", "dns-media-enabled", "media", false),
@@ -99,21 +104,21 @@ var Settings = []Setting{
 	list("chat.domains", "THEFEED_CHAT_DOMAINS", "chat-domains", "dns", checkDomain),
 	onOff("chat.on", "THEFEED_CHAT_ENABLED", "chat-enabled", "chat", true),
 	// The messenger limits ride uint16 on the wire.
-	num("chat.sendPerHour", "THEFEED_CHAT_SEND_PER_HOUR", "chat-send-per-hour", "chat", 1, 65535, 30),
-	num("chat.inboxCap", "THEFEED_CHAT_INBOX_CAP", "chat-inbox-cap", "chat", 1, 65535, 50),
-	num("chat.perPairCap", "THEFEED_CHAT_PER_PAIR_CAP", "chat-per-pair-cap", "chat", 1, 65535, 10),
-	num("chat.maxMsgBytes", "THEFEED_CHAT_MAX_MSG_BYTES", "chat-max-msg-bytes", "chat", 1, 65535, 500),
-	num("chat.ttlHours", "THEFEED_CHAT_TTL_HOURS", "chat-ttl-hours", "chat", 1, 65535, 72),
+	zeroIsDefault(num("chat.sendPerHour", "THEFEED_CHAT_SEND_PER_HOUR", "chat-send-per-hour", "chat", 1, 65535, 30)),
+	zeroIsDefault(num("chat.inboxCap", "THEFEED_CHAT_INBOX_CAP", "chat-inbox-cap", "chat", 1, 65535, 50)),
+	zeroIsDefault(num("chat.perPairCap", "THEFEED_CHAT_PER_PAIR_CAP", "chat-per-pair-cap", "chat", 1, 65535, 10)),
+	zeroIsDefault(num("chat.maxMsgBytes", "THEFEED_CHAT_MAX_MSG_BYTES", "chat-max-msg-bytes", "chat", 1, 65535, 500)),
+	zeroIsDefault(num("chat.ttlHours", "THEFEED_CHAT_TTL_HOURS", "chat-ttl-hours", "chat", 1, 65535, 72)),
 	num("chat.accountTTLDays", "THEFEED_CHAT_ACCOUNT_TTL_DAYS", "chat-account-ttl-days", "chat", 0, 36500, 0),
 	num("chat.maxAccounts", "THEFEED_CHAT_MAX_ACCOUNTS", "chat-max-accounts", "chat", 0, 100_000_000, 0),
-	num("chat.syncSec", "THEFEED_CHAT_SYNC_SECONDS", "chat-sync-seconds", "chat", 0, 3600, 1),
+	zeroIsDefault(num("chat.syncSec", "THEFEED_CHAT_SYNC_SECONDS", "chat-sync-seconds", "chat", 1, 3600, 1)),
 	list("mt.domains", "THEFEED_MTPROTO_DOMAINS", "mtproto-domains", "dns", checkDomain),
 	onOff("mt.on", "THEFEED_MTPROTO_ENABLED", "mtproto-enabled", "mt", true),
 	num("mt.maxTunnels", "THEFEED_MTPROTO_MAX_TUNNELS", "mtproto-max-tunnels", "mt", 0, 1_000_000, 0),
-	num("mt.idleMin", "THEFEED_MTPROTO_IDLE_MINUTES", "mtproto-idle-minutes", "mt", 1, 1440, 5),
-	num("mt.bufferKB", "THEFEED_MTPROTO_BUFFER_KB", "mtproto-buffer-kb", "mt", 1, 65536, 32),
-	num("mt.downKBMin", "THEFEED_MTPROTO_DOWN_KB_PER_MIN", "mtproto-down-kb-per-min", "mt", 0, 10_000_000, 512),
-	num("mt.dialSec", "THEFEED_MTPROTO_DIAL_SECONDS", "mtproto-dial-seconds", "mt", 1, 600, 15),
+	zeroIsDefault(num("mt.idleMin", "THEFEED_MTPROTO_IDLE_MINUTES", "mtproto-idle-minutes", "mt", 1, 1440, 5)),
+	zeroIsDefault(num("mt.bufferKB", "THEFEED_MTPROTO_BUFFER_KB", "mtproto-buffer-kb", "mt", 1, 65536, 32)),
+	zeroIsDefault(num("mt.downKBMin", "THEFEED_MTPROTO_DOWN_KB_PER_MIN", "mtproto-down-kb-per-min", "mt", 1, 10_000_000, 512)),
+	zeroIsDefault(num("mt.dialSec", "THEFEED_MTPROTO_DIAL_SECONDS", "mtproto-dial-seconds", "mt", 1, 600, 15)),
 	onOff("mt.testDCs", "THEFEED_MTPROTO_TEST_DCS", "mtproto-test-dcs", "", false),
 	onOff("media.ghOn", "THEFEED_GITHUB_RELAY_ENABLED", "github-relay-enabled", "media", false),
 	secret(text("media.ghToken", "THEFEED_GITHUB_RELAY_TOKEN", "github-relay-token", "media", "", nil)),
@@ -147,6 +152,9 @@ func Validate(key, value string) error {
 	switch s.Type {
 	case TypeInt:
 		n, err := strconv.Atoi(v)
+		if err == nil && n == 0 && s.ZeroIsDefault {
+			return nil
+		}
 		if err != nil || n < s.Min || n > s.Max {
 			return fmt.Errorf("Use a whole number from %s to %s.", thousands(s.Min), thousands(s.Max))
 		}

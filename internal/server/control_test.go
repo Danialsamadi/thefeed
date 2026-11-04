@@ -281,6 +281,9 @@ func TestCtlReload(t *testing.T) {
 	if got, want := fmt.Sprint(c.channels(t)), "[news pv:94eb7a80 x/jack]"; got != want {
 		t.Fatalf("channels at start = %s, want %s", got, want)
 	}
+	if got, want := fmt.Sprintf("%+v", c.status(t).Lists), "{Channels:[news] Private:[AbCdEf123456] X:[jack]}"; got != want {
+		t.Errorf("lists at start = %s, want %s", got, want)
+	}
 	if err := os.WriteFile(filepath.Join(c.dir, "channels.txt"), []byte("@news\n@daily\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -289,6 +292,26 @@ func TestCtlReload(t *testing.T) {
 	}
 	if got, want := fmt.Sprint(c.channels(t)), "[news daily pv:94eb7a80 x/jack]"; got != want {
 		t.Errorf("channels after reload = %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprintf("%+v", c.status(t).Lists), "{Channels:[news daily] Private:[AbCdEf123456] X:[jack]}"; got != want {
+		t.Errorf("lists after reload = %s, want %s", got, want)
+	}
+	if _, body := c.raw(t, "GET", "/status", ""); !strings.Contains(body, `"lists":{"channels":["news","daily"],"private":["AbCdEf123456"],"x":["jack"]}`) {
+		t.Errorf("/status = %s, want the lists", body)
+	}
+}
+
+// No list is ever left out: empty is [], not missing.
+func TestCtlNoLists(t *testing.T) {
+	c := startCtl(t, func(cfg *Config) {
+		for _, f := range []string{cfg.PrivateChannelsFile, cfg.XAccountsFile} {
+			if err := os.Remove(f); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if _, body := c.raw(t, "GET", "/status", ""); !strings.Contains(body, `"lists":{"channels":["news"],"private":[],"x":[]}`) {
+		t.Errorf("/status = %s, want empty private and x lists", body)
 	}
 }
 
@@ -390,7 +413,7 @@ func (c *ctlServer) raw(t *testing.T, method, path, body string) (int, string) {
 // check runs a feature's check through the panel's client.
 func (c *ctlServer) check(t *testing.T, feature string) *controlapi.CheckResult {
 	t.Helper()
-	res, err := c.api.(controlapi.Checker).Check(context.Background(), feature)
+	res, err := c.api.Check(context.Background(), feature)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,6 +481,19 @@ func TestCtlCheckX(t *testing.T) {
 		if want.error == "" && got.Error != "" || !strings.Contains(got.Error, want.error) {
 			t.Errorf("instance %d error = %q, want one mentioning %q", i, got.Error, want.error)
 		}
+	}
+}
+
+// Every line of x_accounts.txt cleans to nothing: the reader runs, empty.
+func TestCtlCheckXNone(t *testing.T) {
+	c := startCtl(t, func(cfg *Config) {
+		if err := os.WriteFile(cfg.XAccountsFile, []byte("@\nx/\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	res := c.check(t, "x")
+	if res.OK || res.Summary != "there are no X accounts to check the instances with." {
+		t.Errorf("check = ok %v, %q; want not ok, \"there are no X accounts to check the instances with.\"", res.OK, res.Summary)
 	}
 }
 
@@ -553,7 +589,7 @@ func TestCtlCheckChat(t *testing.T) {
 }
 
 // @news's page has no posts, so it counts as a failed fetch; @live has one.
-func TestCtlCheckChan(t *testing.T) {
+func TestCtlChannels(t *testing.T) {
 	c := startCtl(t, nil)
 	var ch *controlapi.Channels
 	waitFor(t, "the first fetch cycle", func() bool {
@@ -573,11 +609,11 @@ func TestCtlCheckChan(t *testing.T) {
 	if err := c.api.ReloadChannels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	res := c.check(t, "chan")
-	if res.OK || res.Summary != "1 of 2 channels fetched, 1 post." {
-		t.Errorf("check = ok %v, %q; want not ok, \"1 of 2 channels fetched, 1 post.\"", res.OK, res.Summary)
-	}
-	cycles := c.status(t).Channels.Cycles
+	var cycles []controlapi.FetchCycle
+	waitFor(t, "the fetch cycle after reload", func() bool {
+		cycles = c.status(t).Channels.Cycles
+		return len(cycles) == 2
+	})
 	if cy := cycles[len(cycles)-1]; cy.Fetched != 1 || cy.Total != 2 || cy.Posts != 1 {
 		t.Errorf("last cycle = %+v, want 1 of 2 channels fetched, 1 post", cy)
 	}
@@ -587,7 +623,7 @@ func TestCtlCheckChan(t *testing.T) {
 func TestCtlCheckOff(t *testing.T) {
 	c := startCtl(t, nil)
 	for feature, want := range map[string]string{"feed": "404", "dnsm": "404", "nope": "404", "gh": "409 Conflict: gh is off"} {
-		if _, err := c.api.(controlapi.Checker).Check(context.Background(), feature); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := c.api.Check(context.Background(), feature); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("check %s: error %v, want one with %q", feature, err, want)
 		}
 	}

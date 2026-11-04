@@ -75,9 +75,10 @@ function nsCell(d) {
 }
 
 // waitingIn counts a section's changes that wait for a restart: its
-// settings, plus the private channels on chan and the X accounts on xacc.
-// The Nitter instances are a setting already; public channels apply live.
+// settings, plus the public and private channels on chan and the X accounts
+// on xacc. The Nitter instances are a setting already; public channels wait
+// only when the server didn't reload them.
 function waitingIn(st, id) {
-  const lists = { chan: 'private', xacc: 'x' };
-  return st.settings.filter(s => s.page === id && s.waiting).length + (lists[id] && st.lists[lists[id]].waiting ? 1 : 0);
+  const lists = { chan: ['channels', 'private'], xacc: ['x'] }[id] || [];
+  return st.settings.filter(s => s.page === id && s.waiting).length + lists.filter(l => st.lists[l].waiting).length;
 }

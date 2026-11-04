@@ -106,7 +106,7 @@ func newPanel(t *testing.T, start time.Time, st *controlapi.Status) *panel {
 	p := &panel{t: t, now: start, srv: &fakeServer{st: st, checks: map[string]*controlapi.CheckResult{}},
 		dns: &fakeDNS{took: map[string]time.Duration{}, err: map[string]error{}}}
 	cfg := admin.Config{AdminDir: t.TempDir(), Clock: admin.ClockFunc(p.clock)}
-	app, err := admin.New(cfg, health.New(p.srv, p.srv, p.dns))
+	app, err := admin.New(cfg, health.New(p.srv, p.dns))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,6 +475,8 @@ func TestMessengerRules(t *testing.T) {
 func TestDNSMediaRules(t *testing.T) {
 	steps(t, "dnsm", []step{
 		{nil, "ok", "3,100 files cached, 18,000 block queries served"},
+		{func(st *controlapi.Status) { st.MediaCache.Errors = 1 }, "down", "1 file the media cache couldn't store in the last 10 minutes"},
+		{func(st *controlapi.Status) { st.MediaCache.Errors = 2 }, "down", "2 files the media cache couldn't store in the last 10 minutes"},
 		{func(st *controlapi.Status) { st.MediaCache = nil }, "down", "The media cache isn't running"},
 		// The cache stays up for the GitHub relay alone.
 		{func(st *controlapi.Status) { st.Server.Config["media.dnsOn"] = "false" }, "off", "Turned off in Control"},

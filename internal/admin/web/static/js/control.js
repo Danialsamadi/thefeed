@@ -130,7 +130,7 @@ const Ctl = (() => {
     if (id === 'private' && !C.st.telegram.loggedIn) {
       return setting('fetch.noTelegram').waiting ? ['Stops updating after a restart: the Telegram login is logged out', 'bad'] : ['Not updating: the Telegram login is logged out', 'bad'];
     }
-    if (it.waiting) return [{ private: 'Joins after a restart', x: 'Fetched after a restart', instances: 'Tried after a restart' }[id]];
+    if (it.waiting) return [{ channels: 'Fetched after a restart', private: 'Joins after a restart', x: 'Fetched after a restart', instances: 'Tried after a restart' }[id]];
     if (id === 'private') return ['Joined'];
     if (id === 'x' && Panel.feature?.('x')?.status === 'down') return ['Paused: no Nitter instance answers', 'bad'];
     return [''];
@@ -159,7 +159,7 @@ const Ctl = (() => {
         body = `<div class="li-b confirm"><p><b>Remove ${esc(itemName(id, it.name))}?</b> ${RM[id]}</p>
           <div class="acts"><button class="btn quiet" type="button" data-act="c-cancel" data-k="rm-cancel">Cancel</button><button class="btn danger" type="button" data-act="c-rm-go" data-row="${key}" data-k="rm-go"${busy}>Remove</button></div></div>`;
       } else if (open) {
-        const searching = id === 'channels' && C.q.trim(), move = id !== 'private' && !searching;
+        const searching = id === 'channels' && C.q.trim(), move = !searching;
         const acts = [(id === 'channels' || id === 'x') && ['c-rename', 'Rename'], move && ['c-up', 'Move up', i === 0], move && ['c-down', 'Move down', i === all.length - 1],
           ['c-rm', 'Remove…', id === 'instances' && all.length === 1]].filter(Boolean);
         body = `<div class="li-b"><p>${about(id, it, i, all.length)}${searching ? ' Clear the search to change the order.' : ''}</p>

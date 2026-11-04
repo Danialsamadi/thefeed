@@ -14,7 +14,7 @@
           + Ctl.num('chat.ttlHours', 'Undelivered messages expire after', '', 'h'))
         + Panel.sec('Storage', Ctl.num('chat.accountTTLDays', 'Delete idle addresses after', '0 keeps them, which keeps the counts right', 'days')
           + Ctl.num('chat.maxAccounts', 'Most addresses stored', '0 means no limit')
-          + Ctl.num('chat.syncSec', 'Write to disk every', '0 writes each message at once: safest, slower', 's'));
+          + Ctl.num('chat.syncSec', 'Write to disk every', 'A crash can lose this many seconds of new messages', 's'));
     },
   });
 })();

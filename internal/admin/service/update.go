@@ -29,18 +29,24 @@ var tagRE = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$`)
 // maxBinary caps a download; thefeed-server is about 30 MB.
 const maxBinary = 256 << 20
 
-func (m *mod) update(ctx context.Context, tag string) error {
-	if !tagRE.MatchString(tag) {
-		return &refused{http.StatusBadRequest, admin.FieldError{Field: "version", Message: "That isn't a release version, such as v0.41.1."}}
+// update installs the newest release, asked of the release source now.
+func (m *mod) update(ctx context.Context) error {
+	repo := m.source(m.load())
+	tag, err := m.Releases.Latest(ctx, repo)
+	if err == nil && !tagRE.MatchString(tag) {
+		err = fmt.Errorf("%q isn't a release version", tag)
+	}
+	if err != nil {
+		return &refused{http.StatusBadGateway, admin.FieldError{Message: "Couldn't find the newest release of " + repo + ": " + err.Error()}}
 	}
 	if update.IsNewer(floor, tag) {
-		return &refused{http.StatusBadRequest, admin.FieldError{Field: "version", Message: tag + " is older than " + floor + ", the oldest version that reads every setting from thefeed.env."}}
+		return &refused{http.StatusConflict, admin.FieldError{Message: "The newest release, " + tag + ", is older than " + floor + ", the oldest version that reads every setting from thefeed.env."}}
 	}
 	name, old := "Update to "+tag, m.version(ctx)
 	if m.Docker != nil {
 		return m.updateContainer(ctx, name, tag, old)
 	}
-	if err := m.fetch(ctx, m.source(m.load()), tag); err != nil {
+	if err := m.fetch(ctx, repo, tag); err != nil {
 		return m.note(name, err)
 	}
 	// The current binary stays as .previous (a second name for the same
@@ -62,21 +68,21 @@ func (m *mod) update(ctx context.Context, tag string) error {
 	}
 
 	// Not healthy: put the old one back.
-	err := os.Rename(prev, m.Binary)
+	err = os.Rename(prev, m.Binary)
 	if err == nil {
 		_, err = m.Systemd.Run(ctx, "restart", unit)
 	}
-	return m.rolledBack(name, tag, old, err)
+	return m.rolledBack(name, tag, old, "", err)
 }
 
 // rolledBack ends an update to tag that wasn't healthy, once old is back;
-// err is putting it back failing.
-func (m *mod) rolledBack(name, tag, old string, err error) error {
+// more is said after that, and err is putting it back failing.
+func (m *mod) rolledBack(name, tag, old, more string, err error) error {
 	if err != nil {
 		return m.note(name, fmt.Errorf("%s didn't answer healthy within %d seconds, and putting %s back failed: %v", tag, healthWait/time.Second, old, err))
 	}
 	m.edit(func(sv *saved) { sv.Previous = "" })
-	msg := fmt.Sprintf("%s didn't answer healthy within %d seconds, so the panel rolled back to %s", tag, healthWait/time.Second, old)
+	msg := fmt.Sprintf("%s didn't answer healthy within %d seconds, so the panel rolled back to %s%s", tag, healthWait/time.Second, old, more)
 	m.line(msg, "")
 	return m.note(name, errors.New(msg+"."))
 }

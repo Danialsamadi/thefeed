@@ -16,7 +16,7 @@
 //	boot-on, boot-off                systemctl enable|disable thefeed-server
 //	reboot                           systemctl reboot
 //	shutdown {domain}                systemctl poweroff, once the typed domain matches THEFEED_DOMAIN
-//	update {version}                 install that release, restart, and roll back if it isn't healthy in 60 s
+//	update                           install the newest release, restart, and roll back if it isn't healthy in 60 s
 //	rollback                         put the version the last update replaced back, and restart
 //	fix-unit                         move the unit's shadowing flags into thefeed.env, and restart
 //	source {repo}                    the owner/repo updates come from; "" for the default
@@ -45,10 +45,11 @@
 //	restart, stop, start             the container's
 //	boot-on, boot-off                its restart policy: unless-stopped or no
 //	reboot, shutdown                 systemctl, as in systemd mode
-//	update {version}                 pull the image's repository at that tag, write THEFEED_SERVER_TAG
+//	update                           pull the image's repository at the newest release's tag, write THEFEED_SERVER_TAG
 //	                                 into compose's .env (THEFEED_ADMIN_COMPOSE_ENV, default
 //	                                 /opt/thefeed/.env), recreate the container on it, and put the
-//	                                 old image and .env back if it isn't healthy in 60 s
+//	                                 old image and .env back if it isn't healthy in 60 s, keeping the
+//	                                 failed container stopped as <container>-failed for its log
 //	rollback                         pull the previous version's tag, write it into .env, recreate
 //	fix-unit                         400: the settings in shadowing are removed from docker-compose.yml
 //
@@ -131,15 +132,18 @@ type Options struct {
 	Unit     string                               // its unit file; default /etc/systemd/system/thefeed-server.service
 
 	// Docker, when set, runs thefeed-server as a container (Docker mode).
-	// nil: /var/run/docker.sock if THEFEED_ADMIN_SERVER is docker, else systemd.
 	Docker     *dockerapi.Client
-	Container  string // the container; default THEFEED_ADMIN_SERVER_CONTAINER, else thefeed-server
+	Container  string // the container; default thefeed-server
 	ComposeEnv string // compose's .env; default THEFEED_ADMIN_COMPOSE_ENV, else /opt/thefeed/.env
 }
 
 // Module is the service module on the real machine.
 func Module(d *admin.Deps) error {
-	return New(Options{Systemd: realSystemd{}, Control: controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName))})(d)
+	docker, name, err := admin.ServerContainer()
+	if err != nil {
+		return err
+	}
+	return New(Options{Systemd: realSystemd{}, Control: d.Control(), Docker: docker, Container: name})(d)
 }
 
 // Line is the status line: what the panel last did, and when.
@@ -208,14 +212,7 @@ func New(o Options) admin.Module {
 		}
 		o.Binary = cmp.Or(o.Binary, filepath.Join(filepath.Dir(filepath.Clean(d.ServerDataDir)), "thefeed-server"))
 		o.Unit = cmp.Or(o.Unit, "/etc/systemd/system/thefeed-server.service")
-		switch v := os.Getenv("THEFEED_ADMIN_SERVER"); {
-		case o.Docker != nil, v == "", v == "systemd":
-		case v == "docker":
-			o.Docker = dockerapi.New("/var/run/docker.sock")
-		default:
-			return fmt.Errorf("THEFEED_ADMIN_SERVER is %q; want systemd or docker", v)
-		}
-		o.Container = cmp.Or(o.Container, os.Getenv("THEFEED_ADMIN_SERVER_CONTAINER"), unit)
+		o.Container = cmp.Or(o.Container, unit)
 		o.ComposeEnv = cmp.Or(o.ComposeEnv, os.Getenv("THEFEED_ADMIN_COMPOSE_ENV"), "/opt/thefeed/.env")
 		if o.Sleep == nil {
 			o.Sleep = func(ctx context.Context, d time.Duration) {
@@ -376,9 +373,8 @@ func (m *mod) act(w http.ResponseWriter, r *http.Request) {
 	}
 	defer m.mu.Unlock()
 	var body struct {
-		Domain  string `json:"domain"`
-		Version string `json:"version"`
-		Repo    string `json:"repo"`
+		Domain string `json:"domain"`
+		Repo   string `json:"repo"`
 	}
 	if !admin.ReadJSON(w, r, &body) {
 		return
@@ -386,7 +382,7 @@ func (m *mod) act(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch name := r.PathValue("action"); name {
 	case "update":
-		err = m.update(ctx, body.Version)
+		err = m.update(ctx)
 	case "rollback":
 		err = m.rollback(ctx)
 	case "fix-unit":
@@ -517,7 +513,7 @@ var power = map[string]action{
 
 // env reads key from thefeed.env; "" when it isn't there.
 func (m *mod) env(key string) string {
-	data, _, _ := serverconfig.ReadFile(filepath.Join(m.d.ServerDataDir, "thefeed.env"))
+	data, _, _ := serverconfig.ReadFile(admin.EnvFile(m.d.ServerDataDir))
 	v, _ := serverconfig.ParseEnv(data).Get(key)
 	return v
 }

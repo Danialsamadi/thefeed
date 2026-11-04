@@ -162,7 +162,7 @@ e2e:
 	go build $(call e2e_flags,$(E2E_FROM)) -o $(E2E_BUILD)/$(BINARY_SERVER)-linux-$(E2E_ARCH) ./cmd/server
 	go build $(call e2e_flags,$(E2E_FROM)) -o $(E2E_BUILD)/$(BINARY_ADMIN)-linux-$(E2E_ARCH) ./cmd/thefeed-admin
 	go build $(call e2e_flags,$(E2E_TO)) -o $(E2E_BUILD)/release/$(BINARY_SERVER)-linux-$(E2E_ARCH) ./cmd/server
-	docker build -f Dockerfile.admin -t thefeed-admin:e2e .
+	docker build --target admin -t thefeed-admin:e2e .
 	docker save thefeed-admin:e2e -o $(E2E_BUILD)/thefeed-admin-image-linux-$(E2E_ARCH).tar
 	docker rmi thefeed-admin:e2e
 	go test -c -tags e2e -o $(E2E_BUILD)/e2e.test ./e2e

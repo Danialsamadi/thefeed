@@ -27,8 +27,10 @@
 // (1, 2, 5, 10, … Mb/s). avg and peak are of the points, now is the latest
 // sample; all three are null with no sample yet. Sizes are bytes; today's
 // traffic counts from midnight in the panel's time zone. RAM's parts and
-// disk's parts each add up to their total. The disk has no media cache
-// part: thefeed-server keeps its media cache in memory.
+// disk's parts each add up to their total. Reports and logs are the hourly
+// reports, the systemd journal and, in Docker mode, the server container's
+// log. The disk has no media cache part: thefeed-server keeps its media
+// cache in memory.
 //
 // reach.resolvers is null before the first probe. telegram counts the data
 // centres and nitter the instances whose last dial or fetch worked, of all
@@ -59,6 +61,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,7 +76,7 @@ import (
 
 // Machine is everything the module reads from outside thefeed-admin.
 type Machine struct {
-	Root     fs.FS                                                                  // the filesystem from "/": proc/..., the data directory, var/log/journal
+	Root     fs.FS                                                                  // the filesystem from "/": proc/..., the data directory
 	Statfs   func(path string) (total, free uint64, err error)                      // size and space free to users of path's filesystem, in bytes
 	Exchange func(ctx context.Context, q *dns.Msg, server string) (*dns.Msg, error) // one DNS query to server ("host:port")
 	Every    func(every time.Duration, f func())                                    // runs f now and then every interval until the app closes
@@ -81,6 +84,10 @@ type Machine struct {
 	// Resolvers are the public resolvers ("host:port") asked whether they
 	// reach this server.
 	Resolvers []string
+	Journal   func(ctx context.Context) ([]byte, error) // what journalctl --disk-usage prints, on the host
+	// LogPath is the server container's log file on the host; nil when the
+	// server is the systemd unit, which logs to the journal.
+	LogPath func(ctx context.Context) (string, error)
 }
 
 // defaultResolvers are well-known public resolvers: Google, Cloudflare,
@@ -100,7 +107,11 @@ func Module(d *admin.Deps) error {
 		}
 		resolvers = append(resolvers, r)
 	}
-	return New(Machine{
+	docker, name, err := admin.ServerContainer()
+	if err != nil {
+		return err
+	}
+	m := Machine{
 		Root:   os.DirFS("/"),
 		Statfs: statfs,
 		Exchange: func(ctx context.Context, q *dns.Msg, server string) (*dns.Msg, error) {
@@ -122,9 +133,22 @@ func Module(d *admin.Deps) error {
 				}
 			}()
 		},
-		Server:    controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName)),
+		Server:    d.Control(),
 		Resolvers: resolvers,
-	})(d)
+		Journal: func(ctx context.Context) ([]byte, error) {
+			return admin.HostCommand(ctx, "journalctl", "--disk-usage").Output()
+		},
+	}
+	if docker != nil {
+		m.LogPath = func(ctx context.Context) (string, error) {
+			c, err := docker.Inspect(ctx, name)
+			if err != nil {
+				return "", err
+			}
+			return c.LogPath, nil
+		}
+	}
+	return New(m)(d)
 }
 
 // New is the sysmetrics module on m.
@@ -530,7 +554,7 @@ func (s *module) page(w http.ResponseWriter, r *http.Request) {
 
 	if total, free, err := s.m.Statfs(s.dataDir); err == nil {
 		p.Disk = disk{Total: total, Free: min(free, total)}
-		p.Disk.ReportsLogs = min(s.reportsAndLogs(), total-p.Disk.Free)
+		p.Disk.ReportsLogs = min(s.reportsAndLogs(ctx), total-p.Disk.Free)
 		p.Disk.SystemData = total - p.Disk.Free - p.Disk.ReportsLogs
 	}
 
@@ -690,12 +714,13 @@ func (s *module) load() []float64 {
 	return out
 }
 
-// reportsAndLogs is the size of the hourly reports in the data directory
-// and of the systemd journal.
+// reportsAndLogs is the size of the hourly reports in the data directory,
+// of the systemd journal and, in Docker mode, of the server container's log,
+// read through PID 1's root since the panel may run in a container.
 //
-// ponytail: assumes the journal sits on the data directory's filesystem,
-// which a one-disk VPS does.
-func (s *module) reportsAndLogs() uint64 {
+// ponytail: assumes the logs sit on the data directory's filesystem, which
+// a one-disk VPS does.
+func (s *module) reportsAndLogs(ctx context.Context) uint64 {
 	var n uint64
 	dir := strings.TrimPrefix(path.Clean(filepath.ToSlash(s.dataDir)), "/")
 	ents, _ := fs.ReadDir(s.m.Root, dir)
@@ -704,16 +729,30 @@ func (s *module) reportsAndLogs() uint64 {
 			n += uint64(info.Size())
 		}
 	}
-	fs.WalkDir(s.m.Root, "var/log/journal", func(_ string, e fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
+	if out, err := s.m.Journal(ctx); err == nil {
+		n += journalSize(string(out))
+	}
+	if s.m.LogPath != nil {
+		if p, err := s.m.LogPath(ctx); err == nil && p != "" {
+			if info, err := fs.Stat(s.m.Root, "proc/1/root"+path.Clean(p)); err == nil {
+				n += uint64(info.Size())
+			}
 		}
-		if info, err := e.Info(); err == nil && info.Mode().IsRegular() {
-			n += uint64(info.Size())
-		}
-		return nil
-	})
+	}
 	return n
+}
+
+// journalUsage is journalctl --disk-usage's "take up 24.0M": a size in
+// bytes, K, M, G... of 1,024.
+var journalUsage = regexp.MustCompile(`take up ([0-9.]+)([BKMGTPE])`)
+
+func journalSize(out string) uint64 {
+	m := journalUsage.FindStringSubmatch(out)
+	if m == nil {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(m[1], 64)
+	return uint64(v * math.Pow(1024, float64(strings.Index("BKMGTPE", m[2]))))
 }
 
 func (s *module) pinned(w http.ResponseWriter, r *http.Request) {

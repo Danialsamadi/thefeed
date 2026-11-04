@@ -57,6 +57,9 @@ type MediaCache struct {
 	uploading atomic.Int64
 	// uploadBytes is what those uploads hold in copies of the files.
 	uploadBytes atomic.Int64
+
+	errMu sync.Mutex
+	errs  window // store errors, in 10s slots: the last 10 minutes
 }
 
 // maxUploadBytes caps uploadBytes: an upload waits its turn for minutes, and
@@ -122,6 +125,7 @@ func NewMediaCache(cfg MediaCacheConfig) *MediaCache {
 		byChannel:    make(map[uint16]*mediaEntry),
 		byHash:       make(map[uint32]*mediaEntry),
 		nextChannel:  protocol.MediaChannelStart,
+		errs:         window{step: 10 * time.Second},
 	}
 }
 
@@ -227,13 +231,14 @@ func (c *MediaCache) StoreWithOptions(cacheKey, tag string, content []byte, mime
 	if dnsFits {
 		var err error
 		channel, err = c.allocateChannelLocked(now)
-		if err != nil {
-			return protocol.MediaMeta{}, err
+		if err == nil {
+			blocks, err = splitMediaBlocks(hash, content, c.compression)
 		}
-		var encErr error
-		blocks, encErr = splitMediaBlocks(hash, content, c.compression)
-		if encErr != nil {
-			return protocol.MediaMeta{}, encErr
+		if err != nil {
+			c.errMu.Lock()
+			c.errs.add(now)
+			c.errMu.Unlock()
+			return protocol.MediaMeta{}, err
 		}
 		if size > 0 {
 			var compressedBody int
@@ -506,7 +511,14 @@ func (c *MediaCache) Stats() MediaCacheStats {
 		Evictions:     atomic.LoadUint64(&c.evictionCount),
 		MaxFileBytes:  c.maxFileBytes,
 		TTLSeconds:    int64(c.ttl / time.Second),
+		Errors:        c.recentErrors(time.Now()),
 	}
+}
+
+func (c *MediaCache) recentErrors(now time.Time) int64 {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	return c.errs.sum(now)
 }
 
 // allocateChannelLocked finds a free channel in the media range, evicting

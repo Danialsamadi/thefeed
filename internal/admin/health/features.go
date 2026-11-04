@@ -389,10 +389,12 @@ func evalMedia(e *env) view {
 		{"Cache time", e.cfg["media.dnsTTLMin"] + " min"},
 		{"Max file size", e.cfg["media.dnsMaxKB"] + " KB"},
 	}}
-	// ponytail: the cache has no error counter, so "reports errors" is
-	// read as "isn't running although it's on".
-	if m == nil {
+	switch {
+	case m == nil:
 		return view{State: "down", Line: "The media cache isn't running", Impact: "Readers can't load images and files over DNS.", Deps: d}
+	case m.Errors > 0:
+		return view{State: "down", Line: plural(int(m.Errors), "file the media cache couldn't store", "files the media cache couldn't store") + " in the last 10 minutes",
+			Impact: "Readers can't load those images and files over DNS.", Deps: d}
 	}
 	return view{State: "ok", Line: fmt.Sprintf("%s files cached, %s block queries served", thousands(m.Entries), thousands(int64(m.Queries))),
 		Impact: "Readers can load images and files up to " + size(m.MaxFileBytes) + " over DNS.",

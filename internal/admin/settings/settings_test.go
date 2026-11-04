@@ -29,11 +29,16 @@ var started = time.Now().Add(-time.Hour).Truncate(time.Second)
 
 // fakeServer is thefeed-server's control socket. config holds the running
 // values the test changes; the rest are the registry defaults, as the
-// server reports them when thefeed.env doesn't set them.
+// server reports them when thefeed.env doesn't set them. lists is the
+// source lists it runs; a reload reads channels.txt in dir into them,
+// unless reloadErr says it failed.
 type fakeServer struct {
-	config  map[string]string
-	down    bool
-	reloads int
+	config    map[string]string
+	lists     controlapi.Lists
+	dir       string
+	down      bool
+	reloads   int
+	reloadErr error
 }
 
 func (f *fakeServer) Status(context.Context) (*controlapi.Status, error) {
@@ -49,12 +54,28 @@ func (f *fakeServer) Status(context.Context) (*controlapi.Status, error) {
 	for k, v := range f.config {
 		cfg[k] = v
 	}
-	return &controlapi.Status{Server: controlapi.Server{Version: "v0.41.0", Started: started, Answering: true, Config: cfg}}, nil
+	return &controlapi.Status{Server: controlapi.Server{Version: "v0.41.0", Started: started, Answering: true, Config: cfg}, Lists: f.lists}, nil
 }
 
-func (f *fakeServer) ReloadChannels(context.Context) error { f.reloads++; return nil }
-func (f *fakeServer) Refresh(context.Context) error        { panic("not used") }
+func (f *fakeServer) ReloadChannels(context.Context) error {
+	f.reloads++
+	if f.reloadErr != nil {
+		return f.reloadErr
+	}
+	data, err := os.ReadFile(filepath.Join(f.dir, "channels.txt"))
+	f.lists.Channels = nil
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			f.lists.Channels = append(f.lists.Channels, strings.TrimPrefix(line, "@"))
+		}
+	}
+	return err
+}
+func (f *fakeServer) Refresh(context.Context) error { panic("not used") }
 func (f *fakeServer) SetAnswering(context.Context, bool) error {
+	panic("not used")
+}
+func (f *fakeServer) Check(context.Context, string) (*controlapi.CheckResult, error) {
 	panic("not used")
 }
 
@@ -95,6 +116,7 @@ func newPanel(t *testing.T, files map[string]string) *panel {
 	t.Helper()
 	p := &panel{t: t, dir: t.TempDir(), srv: &fakeServer{config: map[string]string{}}, dns: &fakeDNS{},
 		now: time.Date(2026, 11, 4, 12, 5, 0, 0, time.UTC)}
+	p.srv.dir = p.dir
 	for name, content := range files {
 		p.write(name, content, started.Add(-time.Hour))
 	}
@@ -190,6 +212,7 @@ type state struct {
 	}
 	Live          bool
 	List          string
+	ReloadError   string
 	RestartNeeded bool
 }
 
@@ -371,7 +394,9 @@ func TestSettingsThePanelDoesntShowNeverWait(t *testing.T) {
 }
 
 func TestEquivalentValuesDontWait(t *testing.T) {
-	p := newPanel(t, map[string]string{"thefeed.env": "THEFEED_CHAT_ENABLED=yes\nTHEFEED_X_RSS_INSTANCES=\nTHEFEED_MSG_LIMIT=015\n"})
+	// 0 is the default for the send limit and the sync interval, as the server reads it.
+	p := newPanel(t, map[string]string{"thefeed.env": "THEFEED_CHAT_ENABLED=yes\nTHEFEED_X_RSS_INSTANCES=\nTHEFEED_MSG_LIMIT=015\n" +
+		"THEFEED_CHAT_SEND_PER_HOUR=0\nTHEFEED_CHAT_SYNC_SECONDS=0\n"})
 	p.srv.config["fetch.msgs"] = "15"
 
 	if s := p.state(); s.Waiting != 0 {
@@ -429,11 +454,14 @@ const (
 	xFile        = "# X usernames (one per line, without @)\nspace_daily\ntech_wire\n"
 )
 
-// sourcesPanel is a panel with every list, logged in to Telegram.
+// sourcesPanel is a panel with every list, logged in to Telegram, and the
+// server running the lists as saved.
 func sourcesPanel(t *testing.T) *panel {
 	p := newPanel(t, map[string]string{"thefeed.env": envFile, "channels.txt": channelsFile,
 		"private_channels.txt": privateFile, "x_accounts.txt": xFile, "session.json": `{"session":"saved"}`})
 	p.srv.config["dns.domain"] = "t.example.com"
+	p.srv.lists = controlapi.Lists{Channels: []string{"daily_brief", "world_desk"}, Private: []string{"Xk2LqP0aZ7c4Hn", "Rt9PwM3vB8sQ1e"},
+		X: []string{"space_daily", "tech_wire"}}
 	return p
 }
 
@@ -634,14 +662,47 @@ func TestDiscardPutsTheFilesBackToWhatTheServerRuns(t *testing.T) {
 	}
 }
 
-func TestAListEditedByHandSinceTheServerStartedWaits(t *testing.T) {
+func TestAListEditedByHandWaitsUntilTheServerRunsIt(t *testing.T) {
 	p := sourcesPanel(t)
 	p.write("x_accounts.txt", xFile+"by_hand\n", time.Now())
 
 	s := p.state()
 
-	if !s.Lists["x"].Waiting || s.Waiting != 1 {
-		t.Fatalf("x waiting %v, %d waiting; want true, 1", s.Lists["x"].Waiting, s.Waiting)
+	if !s.Lists["x"].Waiting || s.Waiting != 1 || s.names("x") != "space_daily=5 tech_wire=6 by_hand=7*" {
+		t.Fatalf("x %s, waiting %v, %d waiting; want by_hand waiting", s.names("x"), s.Lists["x"].Waiting, s.Waiting)
+	}
+
+	p.srv.lists.X = []string{"space_daily", "tech_wire", "by_hand"} // restarted
+	if s := p.state(); s.Lists["x"].Waiting || s.Waiting != 0 {
+		t.Errorf("x waiting %v, %d waiting after the server runs it; want false, 0", s.Lists["x"].Waiting, s.Waiting)
+	}
+}
+
+func TestAChannelTheServerDidntReloadWaits(t *testing.T) {
+	p := sourcesPanel(t)
+	p.srv.reloadErr = errors.New("POST /channels/reload: 500 Internal Server Error: read channels: permission denied")
+
+	s := p.decode(p.list("channels", map[string]any{"op": "add", "value": "tech_digest"}), http.StatusOK)
+
+	if s.Live || s.ReloadError == "" {
+		t.Errorf("live %v, reload error %q; want false and the error", s.Live, s.ReloadError)
+	}
+	if got := s.names("channels"); got != "daily_brief=1 world_desk=2 tech_digest=3*" {
+		t.Errorf("channels = %s", got)
+	}
+	if !s.Lists["channels"].Waiting || s.Waiting != 1 {
+		t.Errorf("channels waiting %v, %d waiting; want true, 1", s.Lists["channels"].Waiting, s.Waiting)
+	}
+}
+
+// The server runs invite hashes: a link written another way, or one it
+// can't read, doesn't wait.
+func TestPrivateChannelsCompareByInviteHash(t *testing.T) {
+	p := sourcesPanel(t)
+	p.write("private_channels.txt", "tg://join?invite=Xk2LqP0aZ7c4Hn\nnot an invite\nt.me/joinchat/Rt9PwM3vB8sQ1e\n+Rt9PwM3vB8sQ1e\n", time.Now())
+
+	if s := p.state(); s.Lists["private"].Waiting || s.Waiting != 0 {
+		t.Errorf("private %s, waiting %v, %d waiting; want nothing waiting", s.names("private"), s.Lists["private"].Waiting, s.Waiting)
 	}
 }
 
@@ -749,5 +810,24 @@ func TestTheNSCheckSaysWhichDomainsPointHere(t *testing.T) {
 	}
 	if d := got.Domains[2]; d.Domain != "m.example.com" || d.PointsHere || d.Error != "lookup m.example.com: no such host" {
 		t.Errorf("m.example.com = %+v, want the lookup error", d)
+	}
+}
+
+// Behind 1:1 NAT the public address is on no interface, but it's the one
+// the operator reached the panel at.
+func TestTheNSCheckCountsTheAddressThePanelWasReachedAt(t *testing.T) {
+	p := newPanel(t, map[string]string{"thefeed.env": "THEFEED_DOMAIN=t.example.com\n"})
+	p.srv.config["dns.domain"] = "t.example.com"
+	p.dns.ns = map[string][]string{"t.example.com": {"ns1.example.com"}}
+	p.dns.addrs = map[string][]string{"ns1.example.com": {"203.0.113.7"}, "panel.test": {"203.0.113.7"}}
+	p.dns.here = []string{"127.0.0.1", "10.0.0.5"}
+
+	w := p.do("POST", "/api/domains/check", map[string]any{})
+	var got struct{ Domains []domain }
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if len(got.Domains) != 1 || !got.Domains[0].PointsHere {
+		t.Errorf("domains = %+v, want t.example.com pointing here: panel.test is 203.0.113.7", got.Domains)
 	}
 }

@@ -1,6 +1,7 @@
 # ============================================================
-# thefeed-server — Multi-stage Docker build
+# thefeed-server and thefeed-admin — Multi-stage Docker build
 # ============================================================
+# Targets: server (the default) and admin, the web panel.
 # Run:    docker compose up -d   (see docker-compose.yml)
 # Login:  docker compose run -it --rm server --data-dir /data --login-only
 # Settings come from /data/thefeed.env, which the server reads itself.
@@ -26,15 +27,31 @@ ARG DATE=unknown
 ARG TARGETOS
 ARG TARGETARCH
 
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
-    -ldflags="-s -w \
+RUN LDFLAGS="-s -w \
       -X github.com/sartoopjj/thefeed/internal/version.Version=${VERSION} \
       -X github.com/sartoopjj/thefeed/internal/version.Commit=${COMMIT} \
-      -X github.com/sartoopjj/thefeed/internal/version.Date=${DATE}" \
-    -o /thefeed-server ./cmd/server
+      -X github.com/sartoopjj/thefeed/internal/version.Date=${DATE}" && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="$LDFLAGS" -o /thefeed-server ./cmd/server && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="$LDFLAGS" -o /thefeed-admin ./cmd/thefeed-admin
 
-# ---- Stage 2: Runtime ----
-FROM alpine:3.21
+# ---- The admin panel ----
+# It's root on the host, as the systemd panel is: run it privileged, with
+# pid: host and the host network. It reaches the host's systemctl and
+# journalctl through nsenter (THEFEED_ADMIN_CONTAINER=1) and reads its
+# settings from /opt/thefeed/data/thefeed.env.
+FROM alpine:3.21 AS admin
+
+# nsenter is in util-linux-misc.
+RUN apk add --no-cache ca-certificates util-linux-misc
+
+COPY --from=builder /thefeed-admin /usr/local/bin/thefeed-admin
+
+ENV THEFEED_ADMIN_CONTAINER=1
+
+ENTRYPOINT ["thefeed-admin"]
+
+# ---- The server: last, so it's the default target ----
+FROM alpine:3.21 AS server
 
 # Copy ca-certificates and tzdata from builder (avoids second apk fetch
 # which can fail on restricted networks).

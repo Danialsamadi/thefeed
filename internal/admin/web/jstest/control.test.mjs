@@ -48,7 +48,7 @@ check('dns before the domains load', summary('dns', v, lists), 'Padding 32 bytes
 
 // ===== waitingIn: how many changes on a section wait for a restart =====
 // Shaped like GET /api/settings: the instances are a setting (xacc.instances)
-// and a list, and count once; public channels apply live and never wait.
+// and a list, and count once; public channels wait only when a reload failed.
 const st = {
   waiting: 5,
   settings: [
@@ -62,6 +62,7 @@ const ids = ['chan', 'xacc', 'chat', 'mt', 'media', 'fetch', 'dns'];
 check('per section', ids.map(id => waitingIn(st, id)), [1, 2, 1, 0, 0, 1, 0]);
 check('adds up to the total', ids.reduce((n, id) => n + waitingIn(st, id), 0), st.waiting);
 check('a section without settings', waitingIn(st, 'acct'), 0);
+check('a public channel the server didn\'t reload', waitingIn({ ...st, lists: { ...st.lists, channels: { waiting: true } } }, 'chan'), 2);
 
 // ===== itemName: how a list entry is named on screen; invite links never in full =====
 check('invite as the server stores it', itemName('private', 'https://t.me/+Xk2LqP0aZ7c4Hn'), 't.me/+Xk2L…');

@@ -1,11 +1,12 @@
 // Control, Server settings, Fetching: how often channels are fetched, how
-// many posts each keeps, and the Telegram login with Log out. Everything
-// applies after a restart.
+// many posts each keeps, and the Telegram login with Log out, which
+// restarts the server. Everything applies after a restart.
 'use strict';
 (() => {
   const C = Ctl.C;
   const STEPS = { 'fetch.every': [3, 5, 10, 15, 20, 30, 60], 'fetch.msgs': [5, 10, 15, 20, 25, 30, 35, 40, 45, 50] };
   let confirm = false; // the Log out confirm replaces the login row
+  let busy = false;    // logging out, then restarting
 
   function step(key, label, help, unit, fewer, more) {
     const v = +Ctl.val(key), id = Ctl.fid(key), ok = d => stepTo(STEPS[key], v, d) != null && !Ctl.off();
@@ -15,8 +16,9 @@
 
   function login() {
     const t = C.st.telegram;
+    if (busy) return '<div class="it"><div class="tx"><b>Telegram login</b><small>Logging out, then restarting…</small></div></div>';
     if (confirm) {
-      return `<div class="it confirm danger"><div class="tx"><b>Log out of Telegram?</b><small>Private channels stop updating after the next restart. Public channels keep working without a login.</small></div>
+      return `<div class="it confirm danger"><div class="tx"><b>Log out of Telegram?</b><small>The server restarts: readers lose about 10 seconds of queries. Private channels stop updating; public channels keep working without a login.</small></div>
         <div class="acts"><button class="btn quiet" type="button" data-act="c-login-cancel" data-k="login-cancel">Cancel</button><button class="btn danger" type="button" data-act="c-login-go" data-k="login-go">Log out</button></div></div>`;
     }
     if (!t.loggedIn) {
@@ -56,10 +58,16 @@
   };
   Panel.acts['c-login-cancel'] = cancel;
   Panel.acts['c-login-go'] = async () => {
+    [confirm, busy] = [false, true];
+    Ctl.render();
     const r = await Ctl.call('POST', '/api/settings/telegram-logout', {});
-    if (!r) return;
-    confirm = false;
-    Panel.say(r.ok ? 'Logged out of Telegram. Private channels stop updating after a restart; public channels keep working.' : Ctl.error(r));
+    // The restart is Service and power's, which works in either mode.
+    const re = r?.ok && await Panel.api('POST', '/api/service/restart', {});
+    busy = false;
+    if (r) {
+      Panel.say(!r.ok ? Ctl.error(r) : re?.ok ? 'Logged out of Telegram and restarted. Private channels stopped; public channels keep working.'
+        : `Logged out of Telegram, but the restart failed${re ? `: ${Ctl.error(re)}` : ''}. Private channels stop after the next restart.`);
+    }
     Ctl.render();
     Ctl.focus('pmsg');
   };

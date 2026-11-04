@@ -30,6 +30,7 @@ type control struct {
 	dns       *DNSServer
 	started   time.Time
 	effective map[string]string
+	invites   []string // the private channels' invite hashes
 }
 
 func (c *control) handler() http.Handler {
@@ -95,6 +96,12 @@ func (c *control) status() controlapi.Status {
 			st.Server.Config[k] = v
 		}
 	}
+	names := d.feed.ChannelNames() // public, then private, then X: see applyChannels
+	st.Lists = controlapi.Lists{
+		Channels: append([]string{}, names[:len(names)-len(d.privateIDs)-len(d.xAccounts)]...),
+		Private:  append([]string{}, c.invites...),
+		X:        append([]string{}, d.xAccounts...),
+	}
 	st.Feed.Domains = d.counts.snapshot(d.zones(), time.Now())
 	if d.chat != nil {
 		ch := d.chat.controlStats(time.Now())
@@ -108,20 +115,11 @@ func (c *control) status() controlapi.Status {
 		sessions, max := d.mtproto.Stats()
 		st.MTProto = &controlapi.MTProto{Sessions: sessions, LiveTunnels: d.mtproto.LiveTunnels(), MaxTunnels: max, DCs: d.mtproto.dcStats(time.Now())}
 	}
-	if cycles, every, _ := d.channelReader(); cycles != nil {
-		st.Channels = &controlapi.Channels{IntervalMs: every.Milliseconds(), Cycles: cycles.snapshot()}
+	if r, ok := d.channelCtl.(interface{ controlStats() *controlapi.Channels }); ok {
+		st.Channels = r.controlStats()
 	}
-	if x := d.xReader; x != nil {
-		x.mu.RLock()
-		st.X = &controlapi.X{Accounts: len(x.accounts), LastPost: x.lastPost}
-		for _, in := range x.instances {
-			res, ok := x.results[in]
-			if !ok {
-				res.Host = in
-			}
-			st.X.Instances = append(st.X.Instances, res)
-		}
-		x.mu.RUnlock()
+	if d.xReader != nil {
+		st.X = d.xReader.controlStats()
 	}
 	return st
 }
@@ -134,7 +132,7 @@ const probeTimeout = 10 * time.Second
 // feature that is off.
 func (c *control) checks() map[string]func(context.Context) controlapi.CheckResult {
 	d := c.dns
-	m := map[string]func(context.Context) controlapi.CheckResult{"x": nil, "gh": nil, "tg": nil, "chat": nil, "chan": nil}
+	m := map[string]func(context.Context) controlapi.CheckResult{"x": nil, "gh": nil, "tg": nil, "chat": nil}
 	if d.xReader != nil {
 		m["x"] = d.xReader.check
 	}
@@ -147,65 +145,46 @@ func (c *control) checks() map[string]func(context.Context) controlapi.CheckResu
 	if d.chat != nil {
 		m["chat"] = d.chat.store.check
 	}
-	if cycles, _, _ := d.channelReader(); cycles != nil {
-		m["chan"] = d.checkChannels
-	}
 	return m
 }
 
-// cycleWait bounds how long the chan check waits for its fetch cycle, inside
-// the panel client's 30 seconds. A longer cycle carries on and shows up in
-// status when it's done.
-const cycleWait = 20 * time.Second
-
-// checkChannels runs a fetch cycle now and reports it.
-func (d *DNSServer) checkChannels(ctx context.Context) controlapi.CheckResult {
-	cycles, _, tag := d.channelReader()
-	asked := time.Now()
-	d.channelCtl.RequestRefresh()
-	ctx, cancel := context.WithTimeout(ctx, cycleWait)
-	defer cancel()
-	res := controlapi.CheckResult{Summary: fmt.Sprintf("no fetch cycle finished within %s; it may still be running.", cycleWait)}
-	if cy, ok := cycles.since(ctx, asked); ok {
-		posts := "posts"
-		if cy.Posts == 1 {
-			posts = "post"
-		}
-		res = controlapi.CheckResult{
-			OK:      cy.Fetched == cy.Total,
-			Summary: fmt.Sprintf("%d of %d channels fetched, %d %s.", cy.Fetched, cy.Total, cy.Posts, posts),
-			Detail:  fmt.Sprintf("took %d ms", cy.DurationMs),
-		}
+// controlStats is the reader's fetch cycles; nil for a nil reader, which
+// NewDNSServer may hold.
+func (tr *TelegramReader) controlStats() *controlapi.Channels {
+	if tr == nil {
+		return nil
 	}
-	log.Printf("%s check: %s %s", tag, res.Summary, res.Detail)
-	return res
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+	return tr.cycles.channels(tr.fetchInterval)
 }
 
-// channelReader is the running Telegram channel reader's fetch cycles,
-// interval and log tag, or a nil log without one.
-func (d *DNSServer) channelReader() (*cycleLog, time.Duration, string) {
-	switch r := d.channelCtl.(type) {
-	case *TelegramReader:
-		if r != nil {
-			r.mu.RLock()
-			defer r.mu.RUnlock()
-			return &r.cycles, r.fetchInterval, "[telegram]"
+// controlStats is the reader's fetch cycles.
+func (pr *PublicReader) controlStats() *controlapi.Channels {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+	return pr.cycles.channels(pr.fetchInterval)
+}
+
+// controlStats is the reader's accounts and each instance's last result.
+func (xr *XPublicReader) controlStats() *controlapi.X {
+	xr.mu.RLock()
+	defer xr.mu.RUnlock()
+	st := &controlapi.X{Accounts: len(xr.accounts), LastPost: xr.lastPost}
+	for _, in := range xr.instances {
+		res, ok := xr.results[in]
+		if !ok {
+			res.Host = in
 		}
-	case *PublicReader:
-		if r != nil {
-			r.mu.RLock()
-			defer r.mu.RUnlock()
-			return &r.cycles, r.fetchInterval, "[public]"
-		}
+		st.Instances = append(st.Instances, res)
 	}
-	return nil, 0, ""
+	return st
 }
 
 // cycleLog is a channel reader's last fetch cycles.
 type cycleLog struct {
 	mu     sync.Mutex
 	cycles []controlapi.FetchCycle // oldest first
-	added  chan struct{}           // closed by the next add
 }
 
 func (l *cycleLog) add(c controlapi.FetchCycle) {
@@ -215,38 +194,13 @@ func (l *cycleLog) add(c controlapi.FetchCycle) {
 	if n := len(l.cycles); n > 10 {
 		l.cycles = l.cycles[n-10:]
 	}
-	if l.added != nil {
-		close(l.added)
-		l.added = nil
-	}
 }
 
-func (l *cycleLog) snapshot() []controlapi.FetchCycle {
+// channels is the log for status, with the reader's interval every.
+func (l *cycleLog) channels(every time.Duration) *controlapi.Channels {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]controlapi.FetchCycle{}, l.cycles...)
-}
-
-// since waits for a cycle that started at t or later.
-func (l *cycleLog) since(ctx context.Context, t time.Time) (controlapi.FetchCycle, bool) {
-	for {
-		l.mu.Lock()
-		if n := len(l.cycles); n > 0 && !l.cycles[n-1].Start.Before(t) {
-			c := l.cycles[n-1]
-			l.mu.Unlock()
-			return c, true
-		}
-		if l.added == nil {
-			l.added = make(chan struct{})
-		}
-		added := l.added
-		l.mu.Unlock()
-		select {
-		case <-added:
-		case <-ctx.Done():
-			return controlapi.FetchCycle{}, false
-		}
-	}
+	return &controlapi.Channels{IntervalMs: every.Milliseconds(), Cycles: append([]controlapi.FetchCycle{}, l.cycles...)}
 }
 
 var (
@@ -383,6 +337,9 @@ func (g *GitHubRelay) check(ctx context.Context) controlapi.CheckResult {
 
 // check probes every instance at once, with the first account.
 func (xr *XPublicReader) check(ctx context.Context) controlapi.CheckResult {
+	if len(xr.accounts) == 0 {
+		return controlapi.CheckResult{Summary: "there are no X accounts to check the instances with."}
+	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	errs := make([]error, len(xr.instances))

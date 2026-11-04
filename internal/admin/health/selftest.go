@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
 
 	"github.com/sartoopjj/thefeed/internal/admin"
-	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
 	"github.com/sartoopjj/thefeed/internal/serverconfig"
 )
@@ -21,8 +19,7 @@ import (
 // Module is the health module on the real server: its control socket, and
 // its DNS listener with the key from thefeed.env.
 func Module(d *admin.Deps) error {
-	c := controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName))
-	return New(c, c.(controlapi.Checker), feedQuery{filepath.Join(d.ServerDataDir, "thefeed.env")})(d)
+	return New(d.Control(), feedQuery{admin.EnvFile(d.ServerDataDir)})(d)
 }
 
 // feedQuery is the real SelfTest: the feed's first metadata block, asked

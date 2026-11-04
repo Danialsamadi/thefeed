@@ -44,7 +44,7 @@ func composeShadowing(c *dockerapi.Container) []string {
 // updateContainer pulls tag's image, writes the tag into compose's .env so
 // docker compose up -d keeps it, and recreates the container on it. If it
 // isn't healthy in time, the container goes back to the image it ran and
-// .env to what it said.
+// .env to what it said; the one that failed is kept, stopped, for its log.
 func (m *mod) updateContainer(ctx context.Context, name, tag, old string) error {
 	c, err := m.Docker.Inspect(ctx, m.Container)
 	if err != nil {
@@ -59,17 +59,18 @@ func (m *mod) updateContainer(ctx context.Context, name, tag, old string) error 
 		return m.note(name, err)
 	}
 	m.edit(func(sv *saved) { sv.Previous = old })
-	if err := m.recreate(ctx, c, repo+":"+tag); err == nil && m.healthy(ctx, tag) {
+	if err := m.recreate(ctx, c, repo+":"+tag, ""); err == nil && m.healthy(ctx, tag) {
 		m.line("Updated to "+tag, "")
 		return m.note(name, nil)
 	}
 	// .env goes back even if the container can't, so docker compose up -d
 	// brings back the version that worked.
-	err = m.recreate(ctx, c, c.Config.Image)
+	kept := m.Container + "-failed"
+	err = m.recreate(ctx, c, c.Config.Image, kept)
 	if werr := was(); err == nil {
 		err = werr
 	}
-	return m.rolledBack(name, tag, old, err)
+	return m.rolledBack(name, tag, old, ". docker logs "+kept+" has its log", err)
 }
 
 // rollbackContainer puts the container back on tag to, the version the last
@@ -88,7 +89,7 @@ func (m *mod) rollbackContainer(ctx context.Context, name, to string) error {
 		return m.note(name, err)
 	}
 	m.edit(func(sv *saved) { sv.Previous, sv.Version = "", to })
-	if err := m.recreate(ctx, c, repo+":"+to); err != nil {
+	if err := m.recreate(ctx, c, repo+":"+to, ""); err != nil {
 		return m.note(name, err)
 	}
 	m.line("Rolled back to "+to, "")
@@ -96,14 +97,26 @@ func (m *mod) rollbackContainer(ctx context.Context, name, to string) error {
 }
 
 // recreate puts the container, as inspected in c, on image: it's stopped
-// and removed, then created like c and started. It may be gone already,
-// when an earlier try failed after removing it.
-func (m *mod) recreate(ctx context.Context, c *dockerapi.Container, image string) error {
-	for _, step := range []func(context.Context, string) error{m.Docker.Stop, m.Docker.Remove} {
-		var de *dockerapi.Error
-		if err := step(ctx, m.Container); err != nil && !(errors.As(err, &de) && de.Status == http.StatusNotFound) {
-			return err
+// and removed, or with keep renamed to keep in place of any container of
+// that name, then created like c and started. It may be gone already, when
+// an earlier try failed after removing it.
+func (m *mod) recreate(ctx context.Context, c *dockerapi.Container, image, keep string) error {
+	gone := func(err error) error { // a container that isn't there is done with
+		if de := (*dockerapi.Error)(nil); errors.As(err, &de) && de.Status == http.StatusNotFound {
+			return nil
 		}
+		return err
+	}
+	err := gone(m.Docker.Stop(ctx, m.Container))
+	if err == nil && keep == "" {
+		err = m.Docker.Remove(ctx, m.Container)
+	} else if err == nil {
+		if err = gone(m.Docker.Remove(ctx, keep)); err == nil {
+			err = m.Docker.Rename(ctx, m.Container, keep)
+		}
+	}
+	if err := gone(err); err != nil {
+		return err
 	}
 	if err := m.Docker.Create(ctx, c, image); err != nil {
 		return err

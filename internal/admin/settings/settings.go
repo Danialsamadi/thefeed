@@ -3,10 +3,10 @@
 // server reads at start (thefeed.env and the list files), through
 // internal/serverconfig.
 //
-// A change "waits" when the saved value differs from the one the running
-// server reports in /status. Public channels are the exception: after
-// writing channels.txt the panel asks the server to reload it, so they
-// apply live.
+// A change "waits" when the saved value or list differs from the one the
+// running server reports in /status. Public channels apply live: after
+// writing channels.txt the panel asks the server to reload it, and they
+// wait only when that fails.
 //
 // # API
 //
@@ -61,17 +61,13 @@ type DNS interface {
 
 // Module is the settings module on the real control socket and resolvers.
 func Module(d *admin.Deps) error {
-	return New(controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName)), publicDNS{})(d)
+	return New(d.Control(), publicDNS{})(d)
 }
 
 // New is the settings module talking to c and dns.
 func New(c controlapi.Client, dns DNS) admin.Module {
 	return func(d *admin.Deps) error {
-		ran, err := d.Bucket("settings.running")
-		if err != nil {
-			return err
-		}
-		m := &module{d: d, c: c, dns: dns, ran: ran}
+		m := &module{d: d, c: c, dns: dns}
 		d.Handle("GET /api/settings", m.handleGet)
 		d.Handle("PATCH /api/settings/{key}", m.handlePatch)
 		d.Handle("POST /api/settings/discard", m.handleDiscard)
@@ -88,22 +84,21 @@ type module struct {
 	d   *admin.Deps
 	c   controlapi.Client
 	dns DNS
-	ran *admin.Bucket // list files as the running server read them; see loadList
 }
 
 func (m *module) path(name string) string { return filepath.Join(m.d.ServerDataDir, name) }
 
 // files is what's on disk, read once per request.
 type files struct {
-	env     *serverconfig.Env
-	envHash string
-	lists   map[string]*listFile
-	running map[string]string // nil when the server doesn't answer
-	started time.Time         // when the running server started
+	env      *serverconfig.Env
+	envHash  string
+	lists    map[string]*listFile
+	running  map[string]string // nil when the server doesn't answer
+	runLists controlapi.Lists
 }
 
 func (m *module) load(ctx context.Context) (*files, error) {
-	data, hash, err := serverconfig.ReadFile(m.path("thefeed.env"))
+	data, hash, err := serverconfig.ReadFile(admin.EnvFile(m.d.ServerDataDir))
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +106,7 @@ func (m *module) load(ctx context.Context) (*files, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if st, err := m.c.Status(ctx); err == nil {
-		f.running, f.started = st.Server.Config, st.Server.Started
+		f.running, f.runLists = st.Server.Config, st.Lists
 	}
 	for _, src := range sources {
 		if f.lists[src.id], err = m.loadList(f, src); err != nil {
@@ -135,7 +130,8 @@ func (m *module) telegram(f *files) telegramView {
 }
 
 // handleLogout logs the server out of Telegram: no login in thefeed.env,
-// and no saved session. It takes effect at the next restart (ticket 12's).
+// and no saved session. It takes effect at a restart, which the page asks
+// the service module for next.
 func (m *module) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var req change
 	if !admin.ReadJSON(w, r, &req) {
@@ -184,7 +180,8 @@ func (f *files) saved(s serverconfig.Setting) string {
 }
 
 // canon is v as the server would run it, so "yes" and "true", "010" and
-// "10", or no Nitter instances and the server's two defaults compare equal.
+// "10", 0 and a ZeroIsDefault setting's default, or no Nitter instances and
+// the server's two defaults compare equal.
 func canon(s serverconfig.Setting, v string) string {
 	if v = strings.TrimSpace(v); v == "" {
 		v = s.Default
@@ -195,7 +192,9 @@ func canon(s serverconfig.Setting, v string) string {
 			return strconv.FormatBool(b)
 		}
 	case s.Type == serverconfig.TypeInt:
-		if n, err := strconv.Atoi(v); err == nil {
+		if n, err := strconv.Atoi(v); err == nil && n == 0 && s.ZeroIsDefault {
+			return s.Default
+		} else if err == nil {
 			return strconv.Itoa(n)
 		}
 	case s.Key == "xacc.instances" && v == "":
@@ -275,8 +274,8 @@ func (m *module) view(f *files) stateView {
 		}
 		v.Settings = append(v.Settings, sv)
 	}
-	// The instances are a setting, counted above; public channels never wait.
-	for _, id := range []string{"private", "x"} {
+	// The instances are a setting, counted above.
+	for _, id := range []string{"channels", "private", "x"} {
 		if v.Lists[id].Waiting {
 			v.Waiting++
 		}
@@ -368,7 +367,7 @@ func (m *module) setEnv(w http.ResponseWriter, r *http.Request, base map[string]
 		admin.WriteError(w, http.StatusBadRequest, admin.FieldError{Field: s.Key, Message: "That value has a space, quote or other character thefeed.env can't hold."})
 		return false
 	}
-	if err := serverconfig.WriteFile(m.path("thefeed.env"), f.env.Bytes(), base["env"]); err != nil {
+	if err := serverconfig.WriteFile(admin.EnvFile(m.d.ServerDataDir), f.env.Bytes(), base["env"]); err != nil {
 		m.writeFailed(w, err)
 		return false
 	}
@@ -405,7 +404,7 @@ func (m *module) handleDiscard(w http.ResponseWriter, r *http.Request) {
 	}
 	var back []*listFile
 	for _, l := range f.lists {
-		if l.path != "" && l.waiting(f) && l.snap != nil {
+		if l.path != "" && l.waiting() {
 			back = append(back, l)
 			stale = stale || req.Base[l.src.id] != l.hash
 		}
@@ -415,13 +414,14 @@ func (m *module) handleDiscard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n > 0 {
-		if err := serverconfig.WriteFile(m.path("thefeed.env"), f.env.Bytes(), req.Base["env"]); err != nil {
+		if err := serverconfig.WriteFile(admin.EnvFile(m.d.ServerDataDir), f.env.Bytes(), req.Base["env"]); err != nil {
 			m.writeFailed(w, err)
 			return
 		}
 	}
 	for _, l := range back {
-		if err := serverconfig.WriteFile(l.path, []byte(l.snap.Content), req.Base[l.src.id]); err != nil {
+		l.list.Items = l.running()
+		if err := serverconfig.WriteFile(l.path, l.list.Bytes(), req.Base[l.src.id]); err != nil {
 			m.writeFailed(w, err)
 			return
 		}

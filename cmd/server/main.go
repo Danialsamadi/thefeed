@@ -285,8 +285,9 @@ func main() {
 	chatIntEnv := func(flagVal *int, def int, env string) {
 		if *flagVal == def {
 			if v := os.Getenv(env); v != "" {
-				// checkSettings has already held it to the setting's range.
-				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				// checkSettings has already held it to the setting's range;
+				// 0 means the default (serverconfig's ZeroIsDefault).
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
 					*flagVal = n
 				}
 			}
