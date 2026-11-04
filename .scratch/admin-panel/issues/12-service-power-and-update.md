@@ -1,6 +1,6 @@
 # 12 Service and power, update and rollback
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02, 04, 05
 Spec: `.scratch/admin-panel/spec.md`, "Service, power and update", user stories 45 to 57
 Design: `.scratch/admin-panel/mockup.html`, the "Service and power" page and the stopped and not-answering banners
@@ -45,3 +45,14 @@ Plus a manual UI check against the mockup.
 ## Notes
 
 - Use one page file following ticket 05's registration. Register the API as its own module.
+
+## Comments
+
+Contracts other tickets rely on (2026-11-04):
+
+- API (full list in the `internal/admin/service` package doc): `GET /api/service` returns `{state: running|paused|stopped, since, started, boot, version, previous, latest, update, source, domain, listen, last{at,text}, shadowing[]}`. `POST /api/service/{pause|resume|restart|stop|start|boot-on|boot-off|reboot|shutdown|update|rollback|fix-unit|source}` answers the same shape. Ticket 11's restart and start buttons can POST `restart` or `start`.
+- "Since" for paused and stopped is when the panel did it. When the server stopped by other means, it's unknown and left out.
+- Update: needs `thefeed-server-linux-<arch>` and `SHA256SUMS` on the release. The kept binary is `<binary>.previous`, with the binary at `/opt/thefeed/thefeed-server` (next to the data dir). The health gate wants `/status` to report the tag itself as its version (the release workflow builds with VERSION = tag).
+- Fix-unit rewrites `/etc/systemd/system/thefeed-server.service`, keeps the old one as `<data-dir>/thefeed-server.service.bak` as install.sh does, and runs `daemon-reload` and `restart`.
+- `internal/update` gained `LatestTag(ctx, repo)` and `OpenAsset(ctx, repo, tag, name)`; `static/js/util.js` gained `upFor`.
+- Not done here: the Readers import-link row and Logout of Telegram, which are on the mockup but not in this ticket. The release-source field isn't in the mockup; it sits under Version.

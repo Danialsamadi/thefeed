@@ -85,6 +85,19 @@ func Check(ctx context.Context) (Status, error) {
 	return s, nil
 }
 
+// LatestTag returns the newest release tag of repo (owner/name) on GitHub,
+// for the admin panel, which updates thefeed-server from a configurable repo.
+func LatestTag(ctx context.Context, repo string) (string, error) {
+	return fetchLatestTag(ctx, httpClient, "https://github.com/"+repo+"/releases/latest")
+}
+
+// OpenAsset downloads asset name of release tag of repo (owner/name),
+// following GitHub's redirect to the file. The caller closes it.
+func OpenAsset(ctx context.Context, repo, tag, name string) (io.ReadCloser, error) {
+	body, _, err := getFollowing(ctx, downloadClient, "https://github.com/"+repo+"/releases/download/"+tag+"/"+name)
+	return body, err
+}
+
 // fetchLatestTag sends a HEAD to url (LatestReleaseURL in production)
 // and returns the trailing /tag/{V} segment from the redirect Location.
 // url is a parameter so tests can hit httptest servers.
