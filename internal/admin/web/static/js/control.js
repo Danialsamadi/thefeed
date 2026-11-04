@@ -44,9 +44,15 @@ const Ctl = (() => {
     if (r) C.failed = r.ok ? '' : fieldErrors(r.data, [])[''];
     render();
   }
-  // Often enough that a restart from Service and power, or an edit over SSH,
-  // shows here soon.
-  Panel.poll(load, 10000);
+  // Every 10 s, so a restart from Service and power, or an edit over SSH,
+  // shows here soon. Not Panel.poll: that holds while live numbers are
+  // paused, and a pause mustn't leave a restart's changes "waiting".
+  let due = 0;
+  setInterval(() => {
+    if (S.auth !== 'in' || S.conn !== 'live' || document.hidden || Date.now() < due) return;
+    due = Date.now() + 10000;
+    load();
+  }, 1000);
 
   // Changing a field and then clicking a button blurs the field first. A
   // redraw between press and release would replace the button and lose the
