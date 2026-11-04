@@ -275,6 +275,8 @@ details.it .body code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, mono
 .pmsg:empty { display: none; }
 .cg .note { color: var(--dim); font-size: 13px; padding: 0 6px 8px; margin-top: -4px; }
 .addf { display: grid; gap: 6px; padding: 12px 14px 14px; }
+/* An input's own width mustn't set the column's: in a narrow pane it pushed the button out of the card. */
+.addf, .af { grid-template-columns: minmax(0, 1fr); }
 .addf label, .renf label { font-size: 14px; font-weight: 600; }
 .addrow { display: flex; gap: 8px; }
 .inp { min-width: 0; flex: 1; min-height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--track-edge); background: var(--bg2); color: var(--text); font: inherit; font-size: 15px; }
