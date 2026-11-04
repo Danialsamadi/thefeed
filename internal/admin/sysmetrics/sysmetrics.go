@@ -122,7 +122,7 @@ func Module(d *admin.Deps) error {
 				}
 			}()
 		},
-		Server:    controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName)),
+		Server:    d.Control(),
 		Resolvers: resolvers,
 	})(d)
 }

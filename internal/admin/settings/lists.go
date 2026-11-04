@@ -269,5 +269,5 @@ func (m *module) saveList(f *files, l *listFile, base map[string]string) error {
 	if err := f.env.Set(s.Env, strings.TrimSpace(string(l.list.Bytes()))); err != nil {
 		return err
 	}
-	return serverconfig.WriteFile(m.path("thefeed.env"), f.env.Bytes(), base["env"])
+	return serverconfig.WriteFile(admin.EnvFile(m.d.ServerDataDir), f.env.Bytes(), base["env"])
 }
