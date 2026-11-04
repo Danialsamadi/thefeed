@@ -16,7 +16,7 @@
 //	boot-on, boot-off                systemctl enable|disable thefeed-server
 //	reboot                           systemctl reboot
 //	shutdown {domain}                systemctl poweroff, once the typed domain matches THEFEED_DOMAIN
-//	update {version}                 install that release, restart, and roll back if it isn't healthy in 60 s
+//	update                           install the newest release, restart, and roll back if it isn't healthy in 60 s
 //	rollback                         put the version the last update replaced back, and restart
 //	fix-unit                         move the unit's shadowing flags into thefeed.env, and restart
 //	source {repo}                    the owner/repo updates come from; "" for the default
@@ -45,7 +45,7 @@
 //	restart, stop, start             the container's
 //	boot-on, boot-off                its restart policy: unless-stopped or no
 //	reboot, shutdown                 systemctl, as in systemd mode
-//	update {version}                 pull the image's repository at that tag, write THEFEED_SERVER_TAG
+//	update                           pull the image's repository at the newest release's tag, write THEFEED_SERVER_TAG
 //	                                 into compose's .env (THEFEED_ADMIN_COMPOSE_ENV, default
 //	                                 /opt/thefeed/.env), recreate the container on it, and put the
 //	                                 old image and .env back if it isn't healthy in 60 s, keeping the
@@ -373,9 +373,8 @@ func (m *mod) act(w http.ResponseWriter, r *http.Request) {
 	}
 	defer m.mu.Unlock()
 	var body struct {
-		Domain  string `json:"domain"`
-		Version string `json:"version"`
-		Repo    string `json:"repo"`
+		Domain string `json:"domain"`
+		Repo   string `json:"repo"`
 	}
 	if !admin.ReadJSON(w, r, &body) {
 		return
@@ -383,7 +382,7 @@ func (m *mod) act(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch name := r.PathValue("action"); name {
 	case "update":
-		err = m.update(ctx, body.Version)
+		err = m.update(ctx)
 	case "rollback":
 		err = m.rollback(ctx)
 	case "fix-unit":

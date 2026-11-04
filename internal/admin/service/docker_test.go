@@ -332,6 +332,7 @@ func TestDockerErrorsSayWhatTheEngineSaid(t *testing.T) {
 	e := newEngine(t, m)
 	p := newPanel(t, m, e.options)
 	e.fail["POST /containers/thefeed-server/restart"] = "Cannot restart container thefeed-server: driver failed programming external connectivity"
+	m.latest["sartoopjj/thefeed"] = "v0.41.1"
 
 	_, msg := p.errorOf(p.do("POST", "/api/service/restart", struct{}{}), http.StatusBadGateway)
 	if want := "Cannot restart container thefeed-server: driver failed programming external connectivity"; msg != want {
@@ -344,7 +345,7 @@ func TestDockerErrorsSayWhatTheEngineSaid(t *testing.T) {
 	// A pull answers 200 and fails inside its stream; nothing else happens.
 	e.calls = nil
 	env := m.read(e.env)
-	_, msg = p.errorOf(p.do("POST", "/api/service/update", map[string]string{"version": "v0.41.1"}), http.StatusBadGateway)
+	_, msg = p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
 	if want := "Couldn't pull ghcr.io/sartoopjj/thefeed-server:v0.41.1: manifest unknown"; msg != want {
 		t.Errorf("update: %q, want %q", msg, want)
 	}
@@ -424,7 +425,7 @@ func TestDockerUpdatePullsAndRecreates(t *testing.T) {
 	e.calls = nil
 	m.now = m.now.Add(time.Minute)
 
-	s := p.act("update", map[string]string{"version": "v0.41.1"})
+	s := p.act("update", nil)
 
 	e.wantCalls(slices.Concat([]string{pull + "v0.41.1"}, recreate)...)
 	if len(e.created) != 1 || !reflect.DeepEqual(e.created[0], recreated(t, "v0.41.1")) {
@@ -458,11 +459,12 @@ func TestDockerUnhealthyUpdateGoesBack(t *testing.T) {
 	e := newEngine(t, m)
 	p := newPanel(t, m, e.options)
 	e.registry[image+":v0.41.1"] = "crash"
+	m.latest["sartoopjj/thefeed"] = "v0.41.1"
 	env := m.read(e.env)
 	e.calls = nil
 	start := m.now
 
-	_, msg := p.errorOf(p.do("POST", "/api/service/update", map[string]string{"version": "v0.41.1"}), http.StatusBadGateway)
+	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
 
 	if !strings.Contains(msg, "60 seconds") || !strings.Contains(msg, "v0.41.0") || !strings.Contains(msg, "docker logs thefeed-server-failed") {
 		t.Errorf("error = %q, want it to say v0.41.1 wasn't healthy in 60 seconds, v0.41.0 is back, and where the log is", msg)
@@ -489,7 +491,8 @@ func TestDockerUnhealthyUpdateGoesBack(t *testing.T) {
 	}
 
 	e.registry[image+":v0.41.2"] = "crash"
-	p.errorOf(p.do("POST", "/api/service/update", map[string]string{"version": "v0.41.2"}), http.StatusBadGateway)
+	m.latest["sartoopjj/thefeed"] = "v0.41.2"
+	p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
 	if e.failed == nil || e.failed["Config"].(map[string]any)["Image"] != image+":v0.41.2" {
 		t.Fatalf("thefeed-server-failed = %v, want the v0.41.2 container in place of the older one", e.failed)
 	}
@@ -502,10 +505,11 @@ func TestDockerUpdateThatCantGoBackStillRestoresTheEnvFile(t *testing.T) {
 	e := newEngine(t, m)
 	p := newPanel(t, m, e.options)
 	e.registry[image+":v0.41.1"] = "v0.41.1"
+	m.latest["sartoopjj/thefeed"] = "v0.41.1"
 	e.fail["POST /containers/create?name=thefeed-server"] = "driver failed programming external connectivity: port 5300 is already allocated"
 	env := m.read(e.env)
 
-	_, msg := p.errorOf(p.do("POST", "/api/service/update", map[string]string{"version": "v0.41.1"}), http.StatusBadGateway)
+	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
 
 	if !strings.Contains(msg, "putting v0.41.0 back failed") || !strings.Contains(msg, "port 5300 is already allocated") {
 		t.Errorf("error = %q, want it to say putting v0.41.0 back failed, and why", msg)
@@ -525,7 +529,7 @@ func TestDockerRollBackRecreatesOnThePreviousTag(t *testing.T) {
 	p.errorOf(p.do("POST", "/api/service/rollback", struct{}{}), http.StatusConflict)
 	e.registry[image+":v0.41.1"] = "v0.41.1"
 	m.latest["sartoopjj/thefeed"] = "v0.41.1"
-	p.act("update", map[string]string{"version": "v0.41.1"})
+	p.act("update", nil)
 	delete(e.images, image+":v0.41.0")
 	e.calls = nil
 
@@ -559,8 +563,9 @@ func TestDockerUpdateFromLatestWithoutAnEnvFile(t *testing.T) {
 	}
 	p := newPanel(t, m, e.options)
 	e.registry[image+":v0.41.1"] = "v0.41.1"
+	m.latest["sartoopjj/thefeed"] = "v0.41.1"
 
-	p.act("update", map[string]string{"version": "v0.41.1"})
+	p.act("update", nil)
 	if got := m.read(e.env); got != "THEFEED_SERVER_TAG=v0.41.1\n" {
 		t.Fatalf(".env = %q, want THEFEED_SERVER_TAG=v0.41.1", got)
 	}
