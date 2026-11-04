@@ -130,7 +130,8 @@ func (m *module) telegram(f *files) telegramView {
 }
 
 // handleLogout logs the server out of Telegram: no login in thefeed.env,
-// and no saved session. It takes effect at the next restart (ticket 12's).
+// and no saved session. It takes effect at a restart, which the page asks
+// the service module for next.
 func (m *module) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var req change
 	if !admin.ReadJSON(w, r, &req) {
