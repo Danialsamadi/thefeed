@@ -56,7 +56,9 @@ func (m *module) handleDomains(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCheck asks public resolvers for each domain's NS records, and
-// whether one of those name servers has one of this server's addresses.
+// whether one of those name servers has one of this server's addresses:
+// its interfaces', and the one the operator reached the panel at, which is
+// the public one behind 1:1 NAT, where no interface has it.
 func (m *module) handleCheck(w http.ResponseWriter, r *http.Request) {
 	ds, err := m.domains(r)
 	if err != nil {
@@ -67,6 +69,13 @@ func (m *module) handleCheck(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		admin.WriteError(w, http.StatusInternalServerError, admin.FieldError{Message: "Couldn't read this server's addresses: " + err.Error()})
 		return
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if addrs, err := m.dns.Addrs(r.Context(), host); err == nil {
+		here = append(here, addrs...)
 	}
 	for i := range ds {
 		d := &ds[i]
@@ -119,10 +128,6 @@ func (publicDNS) Addrs(ctx context.Context, host string) ([]string, error) {
 }
 
 // Here is this machine's interface addresses.
-//
-// Behind NAT (some clouds) the public address isn't on an
-// interface, so every domain reads "doesn't point here"; ask an outside
-// "what's my IP" service if that matters.
 func (publicDNS) Here(context.Context) ([]string, error) {
 	addrs, err := net.InterfaceAddrs()
 	var out []string
