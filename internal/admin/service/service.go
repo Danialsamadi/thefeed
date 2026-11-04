@@ -66,7 +66,7 @@ type Systemd interface {
 type realSystemd struct{}
 
 func (realSystemd) Run(ctx context.Context, args ...string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, "systemctl", args...).Output()
+	out, err := admin.HostCommand(ctx, "systemctl", args...).Output()
 	if ee := (*exec.ExitError)(nil); errors.As(err, &ee) && len(ee.Stderr) > 0 {
 		return out, fmt.Errorf("systemctl %s: %s", strings.Join(args, " "), bytes.TrimSpace(ee.Stderr))
 	}

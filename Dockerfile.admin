@@ -1,0 +1,41 @@
+# ============================================================
+# thefeed-admin, the web panel, as a container (see docker-compose.yml)
+# ============================================================
+# It's root on the host, as the systemd panel is: run it privileged, with
+# pid: host and the host network. It reaches the host's systemctl and
+# journalctl through nsenter (THEFEED_ADMIN_CONTAINER=1) and reads its
+# settings from /opt/thefeed/data/thefeed.env.
+# ============================================================
+
+# On the build machine's platform: Go cross-compiles.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=docker
+ARG COMMIT=unknown
+ARG DATE=unknown
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+    -ldflags="-s -w \
+      -X github.com/sartoopjj/thefeed/internal/version.Version=${VERSION} \
+      -X github.com/sartoopjj/thefeed/internal/version.Commit=${COMMIT} \
+      -X github.com/sartoopjj/thefeed/internal/version.Date=${DATE}" \
+    -o /thefeed-admin ./cmd/thefeed-admin
+
+FROM alpine:3.21
+
+# nsenter is in util-linux-misc.
+RUN apk add --no-cache ca-certificates util-linux-misc
+
+COPY --from=builder /thefeed-admin /usr/local/bin/thefeed-admin
+
+ENV THEFEED_ADMIN_CONTAINER=1
+
+ENTRYPOINT ["thefeed-admin"]

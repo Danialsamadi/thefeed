@@ -23,6 +23,7 @@ import (
 	"github.com/sartoopjj/thefeed/internal/admin/settings"
 	"github.com/sartoopjj/thefeed/internal/admin/sysmetrics"
 	"github.com/sartoopjj/thefeed/internal/admin/web"
+	"github.com/sartoopjj/thefeed/internal/serverconfig"
 	"github.com/sartoopjj/thefeed/internal/version"
 )
 
@@ -58,9 +59,20 @@ func main() {
 	// Env fills in any flag not typed on the command line; typed flags win.
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	// The data directory first: the panel's own settings are in its
+	// thefeed.env too, as the server's are, so a container needs no env
+	// file. The real environment wins, and the file can't move the directory.
+	if v := os.Getenv("THEFEED_DATA_DIR"); v != "" && !given["data-dir"] {
+		*dataDir = v
+	}
+	envData, _, err := serverconfig.ReadFile(filepath.Join(*dataDir, "thefeed.env"))
+	if err != nil {
+		log.Printf("thefeed-admin: %v", err)
+	}
+	serverconfig.ParseEnv(envData).Setenv()
 	for name, env := range map[string]string{
 		"listen": "THEFEED_ADMIN_LISTEN", "hostname": "THEFEED_ADMIN_HOSTNAME", "localhost": "THEFEED_ADMIN_LOCALHOST",
-		"data-dir": "THEFEED_DATA_DIR", "admin-dir": "THEFEED_ADMIN_DIR",
+		"admin-dir": "THEFEED_ADMIN_DIR",
 	} {
 		if v := os.Getenv(env); v != "" && !given[name] {
 			if err := fs.Set(name, v); err != nil {
@@ -91,6 +103,12 @@ func main() {
 		if errors.Is(err, admin.ErrBusy) {
 			// ponytail: the running panel holds bbolt's lock; stopping it is
 			// the operator's one-liner rather than an IPC channel to it.
+			if admin.InContainer() {
+				log.Fatalf("thefeed-admin is running. Run this on the host instead:\n" +
+					"  docker stop thefeed-admin\n" +
+					"  docker run --rm -v /opt/thefeed:/opt/thefeed $(docker inspect -f '{{.Config.Image}}' thefeed-admin) reset-admin\n" +
+					"  docker start thefeed-admin")
+			}
 			log.Fatalf("thefeed-admin is running. Run this instead:\n  systemctl stop thefeed-admin && thefeed-admin reset-admin && systemctl start thefeed-admin")
 		}
 		if err != nil {
