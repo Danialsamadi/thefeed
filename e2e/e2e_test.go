@@ -425,7 +425,7 @@ func (s *suite) update(t *testing.T, from, to string) {
 	if sv.Version != from || sv.Latest != to || !sv.Update {
 		t.Fatalf("service: %+v, want %s installed and %s offered", sv, from, to)
 	}
-	sv = s.act(t, "update", map[string]string{"version": to}, "running")
+	sv = s.act(t, "update", struct{}{}, "running")
 	if sv.Version != to || sv.Previous != from {
 		t.Fatalf("after the update: %+v, want %s running and %s kept", sv, to, from)
 	}

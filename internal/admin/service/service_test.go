@@ -418,13 +418,13 @@ func TestUpdateWithoutAMatchingChecksumIsRefused(t *testing.T) {
 	m.publish("sartoopjj/thefeed", "v0.41.1", "v0.41.1")
 	m.assets["sartoopjj/thefeed/v0.41.1/"+asset] = []byte("v0.41.1 with something extra")
 
-	_, msg := p.errorOf(p.do("POST", "/api/service/update", map[string]string{"version": "v0.41.1"}), http.StatusBadGateway)
+	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
 	if !strings.Contains(msg, "SHA256SUMS") {
 		t.Errorf("error = %q, want it to name SHA256SUMS", msg)
 	}
 
 	m.assets["sartoopjj/thefeed/v0.41.1/SHA256SUMS"] = []byte("0f343b0931126a20f133d67c2b018a3b2a8f1d4f7b0b2a4bfc3c1d0f5a1e2b3c  thefeed-admin-linux-amd64\n")
-	_, msg = p.errorOf(p.do("POST", "/api/service/update", map[string]string{"version": "v0.41.1"}), http.StatusBadGateway)
+	_, msg = p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
 	if !strings.Contains(msg, asset) {
 		t.Errorf("error = %q, want it to name %s", msg, asset)
 	}
@@ -448,7 +448,7 @@ func TestUpdateSwapsBinariesAndRestarts(t *testing.T) {
 	p := newPanel(t, m)
 	m.publish("sartoopjj/thefeed", "v0.41.1", "v0.41.1")
 
-	s := p.act("update", map[string]string{"version": "v0.41.1"})
+	s := p.act("update", nil)
 
 	m.wantCmds("restart thefeed-server")
 	if got, prev := m.read(m.bin), m.read(m.bin+".previous"); got != "v0.41.1" || prev != "v0.41.0" {
@@ -473,7 +473,7 @@ func TestUnhealthyUpdateRollsBack(t *testing.T) {
 	m.publish("sartoopjj/thefeed", "v0.41.1", "crash")
 	start := m.now
 
-	_, msg := p.errorOf(p.do("POST", "/api/service/update", map[string]string{"version": "v0.41.1"}), http.StatusBadGateway)
+	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
 
 	if !strings.Contains(msg, "60 seconds") || !strings.Contains(msg, "v0.41.0") {
 		t.Errorf("error = %q, want it to say v0.41.1 wasn't healthy in 60 seconds and v0.41.0 is back", msg)
@@ -499,7 +499,7 @@ func TestRollBackPutsThePreviousVersionBack(t *testing.T) {
 	p := newPanel(t, m)
 	p.errorOf(p.do("POST", "/api/service/rollback", struct{}{}), http.StatusConflict)
 	m.publish("sartoopjj/thefeed", "v0.41.1", "v0.41.1")
-	p.act("update", map[string]string{"version": "v0.41.1"})
+	p.act("update", nil)
 	m.cmds = nil
 
 	s := p.act("rollback", nil)
@@ -517,20 +517,29 @@ func TestRollBackPutsThePreviousVersionBack(t *testing.T) {
 }
 
 // Servers before v0.40.1-rc0 don't read every setting from thefeed.env, so
-// the panel neither updates nor rolls back to one.
+// the panel neither updates nor rolls back to one. A newest release that
+// isn't a version installs nothing either.
 func TestNoUpdateOrRollbackBelowTheFloor(t *testing.T) {
 	m := newMachine(t, "v0.40.0")
 	p := newPanel(t, m)
-	m.publish("sartoopjj/thefeed", "v0.39.2", "v0.39.2")
-	for _, v := range []string{"v0.39.2", "v0.40.0", "../../evil", ""} {
-		if field, _ := p.errorOf(p.do("POST", "/api/service/update", map[string]string{"version": v}), http.StatusBadRequest); field != "version" {
-			t.Errorf("update to %q: error on %q, want version", v, field)
+	for _, c := range []struct {
+		latest string
+		code   int
+		want   string
+	}{
+		{"v0.39.2", http.StatusConflict, "The newest release, v0.39.2, is older than v0.40.1-rc0"},
+		{"v0.40.0", http.StatusConflict, "The newest release, v0.40.0, is older than v0.40.1-rc0"},
+		{"../../evil", http.StatusBadGateway, `Couldn't find the newest release of sartoopjj/thefeed: "../../evil" isn't a release version`},
+	} {
+		m.latest["sartoopjj/thefeed"] = c.latest
+		if _, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), c.code); !strings.HasPrefix(msg, c.want) {
+			t.Errorf("update with %q the newest: %q, want %q", c.latest, msg, c.want)
 		}
 	}
 	m.wantCmds()
 
 	m.publish("sartoopjj/thefeed", "v0.41.0", "v0.41.0")
-	if s := p.act("update", map[string]string{"version": "v0.41.0"}); s.Previous != "v0.40.0" {
+	if s := p.act("update", nil); s.Previous != "v0.40.0" {
 		t.Fatalf("previous = %q, want v0.40.0", s.Previous)
 	}
 	m.cmds = nil
@@ -683,7 +692,7 @@ func TestReleasesCanComeFromAnotherAddress(t *testing.T) {
 	if s := p.state(p.do("GET", "/api/service", nil)); s.Latest != "v0.41.1" || !s.Update {
 		t.Fatalf("state = %+v, want v0.41.1 found at %s", s, gh.URL)
 	}
-	p.act("update", map[string]string{"version": "v0.41.1"})
+	p.act("update", nil)
 	if got := m.read(m.bin); got != "v0.41.1" || m.running != "v0.41.1" {
 		t.Fatalf("binary %q, running %q; want v0.41.1 from %s", got, m.running, gh.URL)
 	}

@@ -161,7 +161,7 @@
   };
   Panel.acts['svc-go'] = b => {
     const a = b.dataset.a;
-    run(a, a === 'shutdown' ? { domain: typed } : a === 'update' ? { version: svc.latest } : {});
+    run(a, a === 'shutdown' ? { domain: typed } : {});
   };
   Panel.acts['svc-cancel'] = cancel;
   Panel.acts['svc-boot'] = () => run(svc.boot ? 'boot-off' : 'boot-on');
