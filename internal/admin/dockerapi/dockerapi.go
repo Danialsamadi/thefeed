@@ -72,7 +72,8 @@ type Container struct {
 	HostConfig struct {
 		RestartPolicy struct{ Name string }
 	}
-	raw json.RawMessage // all of it, for Create
+	LogPath string          // its json-file log, on the host
+	raw     json.RawMessage // all of it, for Create
 }
 
 // Inspect reads the container name.

@@ -32,12 +32,15 @@ const (
 
 // rig is the real admin app with the sysmetrics module on a faked machine:
 // /proc from testdata in a MapFS the test edits between samples, statfs,
-// the clock and its timers, DNS exchanges and thefeed-server's control API.
+// journalctl --disk-usage, the server container's log path, the clock and
+// its timers, DNS exchanges and thefeed-server's control API.
 type rig struct {
 	t           *testing.T
 	now         time.Time
 	root        fstest.MapFS
 	total, free uint64             // what statfs says about the data directory
+	journal     string             // what journalctl --disk-usage prints
+	logPath     string             // the server container's log file; "": systemd mode
 	status      *controlapi.Status // nil: thefeed-server doesn't answer
 	rcode       map[string]int     // each resolver's answer; missing ones time out
 	asked       []string           // "resolver name", in order
@@ -115,6 +118,15 @@ func (r *rig) start() {
 		Every:     func(every time.Duration, f func()) { r.timers[every] = f },
 		Server:    fakeServer{r},
 		Resolvers: m4,
+		Journal: func(context.Context) ([]byte, error) {
+			if r.journal == "" {
+				return nil, errors.New("exec: \"journalctl\": executable file not found in $PATH")
+			}
+			return []byte(r.journal), nil
+		},
+	}
+	if r.logPath != "" {
+		m.LogPath = func(context.Context) (string, error) { return r.logPath, nil }
 	}
 	cfg := admin.Config{AdminDir: r.adminDir, ServerDataDir: dataDir, Clock: admin.ClockFunc(func() time.Time { return r.now })}
 	app, err := admin.New(cfg, sysmetrics.New(m))
@@ -284,11 +296,11 @@ type page struct {
 func TestRAMDiskAndProcess(t *testing.T) {
 	r := newRig(t)
 	// In the data directory: 900 bytes of hourly reports and a 5,000-byte
-	// chat store; in the journal, 100 bytes.
+	// chat store; the journal takes up 24.0M, 25,165,824 bytes.
 	r.root["srv/thefeed/data/dns_hourly.jsonl"] = &fstest.MapFile{Data: make([]byte, 600)}
 	r.root["srv/thefeed/data/dns_hourly.jsonl.1"] = &fstest.MapFile{Data: make([]byte, 300)}
 	r.root["srv/thefeed/data/chat.db"] = &fstest.MapFile{Data: make([]byte, 5000)}
-	r.root["var/log/journal/0a1b2c/system.journal"] = &fstest.MapFile{Data: make([]byte, 100)}
+	r.journal = "Archived and active journals take up 24.0M in the file system.\n"
 	r.sample()
 	var got page
 	r.getJSON("/api/server", &got)
@@ -300,10 +312,10 @@ func TestRAMDiskAndProcess(t *testing.T) {
 	if ram.Total != 1024<<20 || ram.Server != 286<<20 || ram.MediaCache != 98<<20 || ram.System != 28<<20 || ram.Free != 612<<20 {
 		t.Errorf("ram = %+v, want total %d, server %d, media cache %d, system %d, free %d", ram, 1024<<20, 286<<20, 98<<20, 28<<20, 612<<20)
 	}
-	// Disk: 20 GB, 12.4 GB free, 1,000 bytes of reports and logs; the rest
-	// (chat store included) is system and data.
-	if d := got.Disk; d.Total != 20_000_000_000 || d.ReportsLogs != 1000 || d.SystemData != 7_599_999_000 || d.Free != 12_400_000_000 {
-		t.Errorf("disk = %+v, want total 20000000000, reports and logs 1000, system and data 7599999000, free 12400000000", d)
+	// Disk: 20 GB, 12.4 GB free, 25,166,724 bytes of reports and logs; the
+	// rest (chat store included) is system and data.
+	if d := got.Disk; d.Total != 20_000_000_000 || d.ReportsLogs != 25_166_724 || d.SystemData != 7_574_833_276 || d.Free != 12_400_000_000 {
+		t.Errorf("disk = %+v, want total 20000000000, reports and logs 25166724, system and data 7574833276, free 12400000000", d)
 	}
 	p := got.Process
 	if !p.Running || p.Since == nil || !p.Since.Equal(time.Date(2026, 10, 22, 7, 58, 0, 0, time.UTC)) {
@@ -314,6 +326,23 @@ func TestRAMDiskAndProcess(t *testing.T) {
 	}
 	if p.FDs == nil || *p.FDs != 8 || p.Sockets == nil || *p.Sockets != 3 || p.Listen != ":5300" {
 		t.Errorf("fds %v, sockets %v, listen %q; want 8, 3, :5300", p.FDs, p.Sockets, p.Listen)
+	}
+}
+
+// In Docker mode the server logs to its container's log file, which the
+// panel reads through PID 1's root: it runs with pid: host.
+func TestDiskCountsTheServerContainersLog(t *testing.T) {
+	r := newRig(t)
+	r.logPath = "/var/lib/docker/containers/4f1c/4f1c-json.log"
+	r.journal = "Journals take up 512B on disk.\n"
+	r.root["proc/1/root/var/lib/docker/containers/4f1c/4f1c-json.log"] = &fstest.MapFile{Data: make([]byte, 7000)}
+	r.app.Close()
+	r.start()
+	r.sample()
+	var got page
+	r.getJSON("/api/server", &got)
+	if d := got.Disk; d.ReportsLogs != 7512 {
+		t.Errorf("reports and logs = %d, want 7512: the journal's 512 bytes and the container's 7,000", d.ReportsLogs)
 	}
 }
 
