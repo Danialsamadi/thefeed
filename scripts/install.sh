@@ -24,6 +24,10 @@ INSTALL_DIR="/opt/thefeed"
 DATA_DIR="${INSTALL_DIR}/data"
 SERVICE_FILE="/etc/systemd/system/thefeed-server.service"
 ADMIN_SERVICE_FILE="/etc/systemd/system/thefeed-admin.service"
+# --local <dir>: install the release-named binaries a build left in <dir>
+# (thefeed-server-linux-<arch>, thefeed-admin-linux-<arch>) instead of
+# downloading them. The end-to-end suite installs this way.
+LOCAL_DIR=""
 
 arch() {
     case "$(uname -m)" in
@@ -171,12 +175,24 @@ list_versions() {
 # Downloads release asset $2-linux-<arch> (default thefeed-server) of version
 # $1 to ${INSTALL_DIR}/$2. It goes through a temporary file and a rename, so a
 # running binary is never written over. Returns 1 when the download fails.
+# With --local it copies ${LOCAL_DIR}/$2-linux-<arch> instead.
 download_binary() {
-    resolve_source
     local version="$1" name="${2:-thefeed-server}"
     local arch_name
     arch_name=$(arch)
     local binary_name="${name}-linux-${arch_name}"
+    mkdir -p "$INSTALL_DIR"
+    if [[ -n "$LOCAL_DIR" ]]; then
+        echo -e "${green}Installing ${name} from ${LOCAL_DIR}/${binary_name}...${plain}"
+        if ! cp "${LOCAL_DIR}/${binary_name}" "${INSTALL_DIR}/${name}.new"; then
+            rm -f "${INSTALL_DIR}/${name}.new"
+            return 1
+        fi
+        chmod 755 "${INSTALL_DIR}/${name}.new"
+        mv -f "${INSTALL_DIR}/${name}.new" "${INSTALL_DIR}/${name}"
+        return 0
+    fi
+    resolve_source
     local url
     if [[ "$SOURCE" == "gitlab" ]]; then
         # GitLab Release direct-asset URL — same path the CI registers via
@@ -187,7 +203,6 @@ download_binary() {
     fi
 
     echo -e "${green}Downloading ${name} ${version} for linux/${arch_name} from ${SOURCE}...${plain}"
-    mkdir -p "$INSTALL_DIR"
 
     if ! curl -4fLo "${INSTALL_DIR}/${name}.new" "$url"; then
         rm -f "${INSTALL_DIR}/${name}.new"
@@ -1205,17 +1220,24 @@ show_usage() {
     echo ""
 }
 
+# When invoked via `curl | bash`, stdin is the pipe, not a terminal —
+# so every read in setup_config returns empty and the user is never
+# prompted. Re-open stdin from /dev/tty so prompts work as expected.
+reopen_tty() {
+    if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
+        exec </dev/tty
+    fi
+}
+
 install_thefeed() {
     local version="$1"
     local channel="${2:-stable}"  # "stable" or "pre"
 
-    # When invoked via `curl | bash`, stdin is the pipe, not a terminal —
-    # so every read in setup_config returns empty and the user is never
-    # prompted. Re-open stdin from /dev/tty so prompts work as expected.
-    if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
-        exec </dev/tty
-    fi
+    reopen_tty
 
+    if [[ -z "$version" && -n "$LOCAL_DIR" ]]; then
+        version=$("${LOCAL_DIR}/thefeed-server-linux-$(arch)" --version 2>&1 | awk '{print $2}')
+    fi
     if [[ -z "$version" ]]; then
         if [[ "$channel" == "pre" ]]; then
             version=$(get_latest_prerelease)
@@ -1389,6 +1411,7 @@ show_help() {
     echo -e "  ${green}--list${plain}                 List recent releases with stable/pre labels"
     echo -e "  ${green}--source <name>${plain}        Pick release mirror: github | gitlab | auto (default: auto)"
     echo -e "  ${green}--github${plain} / ${green}--gitlab${plain}     Shortcut for --source github / --source gitlab"
+    echo -e "  ${green}--local <dir>${plain}          Install <dir>/thefeed-{server,admin}-linux-<arch> instead of downloading (testing)"
     echo -e "  ${green}--login${plain}                Re-authenticate with Telegram"
     echo -e "  ${green}--config${plain}               Print the current server config import URI (domain, key, sk=, resolvers)"
     echo -e "  ${green}--uninstall${plain}            Remove thefeed and its admin panel"
@@ -1483,6 +1506,13 @@ while [[ $# -gt 0 ]]; do
             REQUEST_VERSION="$1"; shift ;;
         --version=*)
             REQUEST_VERSION="${1#*=}"; shift ;;
+        --local)
+            shift
+            if [[ ! -d "${1:-}" ]]; then
+                echo -e "${red}--local requires a directory of built binaries${plain}"
+                exit 1
+            fi
+            LOCAL_DIR="$1"; shift ;;
         --)
             shift; break ;;
         -*)
@@ -1512,7 +1542,8 @@ case "$ACTION" in
     list)
         list_versions; exit 0 ;;
     install)
-        install_base
+        # Local binaries need nothing downloaded, so no curl either.
+        [[ -z "$LOCAL_DIR" ]] && install_base
         install_thefeed "$REQUEST_VERSION" "$REQUEST_CHANNEL"
         exit 0 ;;
 esac
