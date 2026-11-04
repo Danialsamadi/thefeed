@@ -6,6 +6,7 @@
 // # API
 //
 //	GET  /api/service                State
+//	GET  /api/service/import-link    {"link"}: the readers' thefeed:// link, as --print-config prints it
 //	POST /api/service/{action}       does it, then answers State
 //
 // The actions, with their JSON bodies:
@@ -26,8 +27,9 @@
 //
 // # Updates
 //
-// Releases come from GitHub: the newest tag, looked up at most once an
-// hour, and the assets thefeed-server-linux-<arch> and SHA256SUMS. A
+// Releases come from GitHub, or from THEFEED_ADMIN_RELEASE_BASE_URL in
+// thefeed.env when set: the newest tag, looked up at most once an hour,
+// and the assets thefeed-server-linux-<arch> and SHA256SUMS. A
 // download without a matching SHA256SUMS line installs nothing. The
 // installed binary is kept as <binary>.previous. No version older than
 // v0.40.1-rc0 is installed, by update or by rollback.
@@ -77,21 +79,24 @@ type Releases interface {
 	Download(ctx context.Context, repo, tag, name string) (io.ReadCloser, error)
 }
 
-type realReleases struct{}
+// realReleases downloads from base(): github.com unless
+// THEFEED_ADMIN_RELEASE_BASE_URL in thefeed.env names a server laid out
+// like it, such as the end-to-end suite's fake release.
+type realReleases struct{ base func() string }
 
-func (realReleases) Latest(ctx context.Context, repo string) (string, error) {
-	return update.LatestTag(ctx, repo)
+func (g realReleases) Latest(ctx context.Context, repo string) (string, error) {
+	return update.LatestTag(ctx, g.base(), repo)
 }
 
-func (realReleases) Download(ctx context.Context, repo, tag, name string) (io.ReadCloser, error) {
-	return update.OpenAsset(ctx, repo, tag, name)
+func (g realReleases) Download(ctx context.Context, repo, tag, name string) (io.ReadCloser, error) {
+	return update.OpenAsset(ctx, g.base(), repo, tag, name)
 }
 
 // Options are the module's edges. Tests fake them; Module uses the real ones.
 type Options struct {
 	Systemd  Systemd
-	Control  controlapi.Client // only Status and SetAnswering are used
-	Releases Releases
+	Control  controlapi.Client                    // only Status and SetAnswering are used
+	Releases Releases                             // nil: GitHub, or THEFEED_ADMIN_RELEASE_BASE_URL
 	Sleep    func(context.Context, time.Duration) // nil: time passes
 	Binary   string                               // thefeed-server; default: next to the data directory, as install.sh puts it
 	Unit     string                               // its unit file; default /etc/systemd/system/thefeed-server.service
@@ -99,7 +104,7 @@ type Options struct {
 
 // Module is the service module on the real machine.
 func Module(d *admin.Deps) error {
-	return New(Options{Systemd: realSystemd{}, Control: controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName)), Releases: realReleases{}})(d)
+	return New(Options{Systemd: realSystemd{}, Control: controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName))})(d)
 }
 
 // Line is the status line: what the panel last did, and when.
@@ -172,8 +177,12 @@ func New(o Options) admin.Module {
 			}
 		}
 		m := &mod{Options: o, d: d, store: store}
+		if m.Releases == nil {
+			m.Releases = realReleases{func() string { return cmp.Or(m.env("THEFEED_ADMIN_RELEASE_BASE_URL"), "https://github.com") }}
+		}
 		d.Handle("GET /api/service", func(w http.ResponseWriter, r *http.Request) { m.reply(w, r.Context()) })
 		d.Handle("POST /api/service/{action}", m.act)
+		d.Handle("GET /api/service/import-link", m.importLink)
 		return nil
 	}
 }
@@ -433,3 +442,21 @@ func (m *mod) env(key string) string {
 }
 
 func (m *mod) domain() string { return m.env("THEFEED_DOMAIN") }
+
+// importLink answers {"link"}: the readers' thefeed:// link, built from
+// thefeed.env and the server's signing key as thefeed-server --print-config
+// builds it. It holds the key: it's not logged or recorded.
+func (m *mod) importLink(w http.ResponseWriter, r *http.Request) {
+	domain, pass := m.domain(), m.env("THEFEED_KEY")
+	if domain == "" || pass == "" {
+		admin.WriteError(w, http.StatusConflict, admin.FieldError{Message: "THEFEED_DOMAIN and THEFEED_KEY must both be set in thefeed.env to make the link."})
+		return
+	}
+	key, err := serverconfig.LoadOrCreateServerKey(m.d.ServerDataDir)
+	if err != nil {
+		admin.WriteError(w, http.StatusInternalServerError, admin.FieldError{Message: "Couldn't read the server's signing key: " + err.Error()})
+		return
+	}
+	link := serverconfig.ConfigURI(domain, strings.Split(m.env("THEFEED_EXTRA_DOMAINS"), ","), pass, key)
+	admin.WriteJSON(w, http.StatusOK, map[string]string{"link": link})
+}
