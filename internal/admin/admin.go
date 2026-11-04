@@ -50,10 +50,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+
+	"github.com/sartoopjj/thefeed/internal/controlapi"
 )
 
 // Clock is where the panel reads the time, so tests can move it.
@@ -98,6 +101,14 @@ func (d *Deps) Bucket(name string) (*Bucket, error) { return newBucket(d.app.db,
 
 // Record appends a to the action record. A zero At means now.
 func (d *Deps) Record(a Action) error { return d.app.record(a) }
+
+// Control is thefeed-server's control socket.
+func (d *Deps) Control() controlapi.Client {
+	return controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName))
+}
+
+// EnvFile is thefeed-server's settings file in its data directory dataDir.
+func EnvFile(dataDir string) string { return filepath.Join(dataDir, "thefeed.env") }
 
 // App is a running panel: its database, routes and modules.
 type App struct {

@@ -65,7 +65,7 @@ func main() {
 	if v := os.Getenv("THEFEED_DATA_DIR"); v != "" && !given["data-dir"] {
 		*dataDir = v
 	}
-	envData, _, err := serverconfig.ReadFile(filepath.Join(*dataDir, "thefeed.env"))
+	envData, _, err := serverconfig.ReadFile(admin.EnvFile(*dataDir))
 	if err != nil {
 		log.Printf("thefeed-admin: %v", err)
 	}

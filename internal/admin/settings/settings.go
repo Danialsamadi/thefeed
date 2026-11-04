@@ -61,7 +61,7 @@ type DNS interface {
 
 // Module is the settings module on the real control socket and resolvers.
 func Module(d *admin.Deps) error {
-	return New(controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName)), publicDNS{})(d)
+	return New(d.Control(), publicDNS{})(d)
 }
 
 // New is the settings module talking to c and dns.
@@ -103,7 +103,7 @@ type files struct {
 }
 
 func (m *module) load(ctx context.Context) (*files, error) {
-	data, hash, err := serverconfig.ReadFile(m.path("thefeed.env"))
+	data, hash, err := serverconfig.ReadFile(admin.EnvFile(m.d.ServerDataDir))
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +368,7 @@ func (m *module) setEnv(w http.ResponseWriter, r *http.Request, base map[string]
 		admin.WriteError(w, http.StatusBadRequest, admin.FieldError{Field: s.Key, Message: "That value has a space, quote or other character thefeed.env can't hold."})
 		return false
 	}
-	if err := serverconfig.WriteFile(m.path("thefeed.env"), f.env.Bytes(), base["env"]); err != nil {
+	if err := serverconfig.WriteFile(admin.EnvFile(m.d.ServerDataDir), f.env.Bytes(), base["env"]); err != nil {
 		m.writeFailed(w, err)
 		return false
 	}
@@ -415,7 +415,7 @@ func (m *module) handleDiscard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n > 0 {
-		if err := serverconfig.WriteFile(m.path("thefeed.env"), f.env.Bytes(), req.Base["env"]); err != nil {
+		if err := serverconfig.WriteFile(admin.EnvFile(m.d.ServerDataDir), f.env.Bytes(), req.Base["env"]); err != nil {
 			m.writeFailed(w, err)
 			return
 		}

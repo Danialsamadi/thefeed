@@ -131,15 +131,18 @@ type Options struct {
 	Unit     string                               // its unit file; default /etc/systemd/system/thefeed-server.service
 
 	// Docker, when set, runs thefeed-server as a container (Docker mode).
-	// nil: /var/run/docker.sock if THEFEED_ADMIN_SERVER is docker, else systemd.
 	Docker     *dockerapi.Client
-	Container  string // the container; default THEFEED_ADMIN_SERVER_CONTAINER, else thefeed-server
+	Container  string // the container; default thefeed-server
 	ComposeEnv string // compose's .env; default THEFEED_ADMIN_COMPOSE_ENV, else /opt/thefeed/.env
 }
 
 // Module is the service module on the real machine.
 func Module(d *admin.Deps) error {
-	return New(Options{Systemd: realSystemd{}, Control: controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName))})(d)
+	docker, name, err := admin.ServerContainer()
+	if err != nil {
+		return err
+	}
+	return New(Options{Systemd: realSystemd{}, Control: d.Control(), Docker: docker, Container: name})(d)
 }
 
 // Line is the status line: what the panel last did, and when.
@@ -208,14 +211,7 @@ func New(o Options) admin.Module {
 		}
 		o.Binary = cmp.Or(o.Binary, filepath.Join(filepath.Dir(filepath.Clean(d.ServerDataDir)), "thefeed-server"))
 		o.Unit = cmp.Or(o.Unit, "/etc/systemd/system/thefeed-server.service")
-		switch v := os.Getenv("THEFEED_ADMIN_SERVER"); {
-		case o.Docker != nil, v == "", v == "systemd":
-		case v == "docker":
-			o.Docker = dockerapi.New("/var/run/docker.sock")
-		default:
-			return fmt.Errorf("THEFEED_ADMIN_SERVER is %q; want systemd or docker", v)
-		}
-		o.Container = cmp.Or(o.Container, os.Getenv("THEFEED_ADMIN_SERVER_CONTAINER"), unit)
+		o.Container = cmp.Or(o.Container, unit)
 		o.ComposeEnv = cmp.Or(o.ComposeEnv, os.Getenv("THEFEED_ADMIN_COMPOSE_ENV"), "/opt/thefeed/.env")
 		if o.Sleep == nil {
 			o.Sleep = func(ctx context.Context, d time.Duration) {
@@ -517,7 +513,7 @@ var power = map[string]action{
 
 // env reads key from thefeed.env; "" when it isn't there.
 func (m *mod) env(key string) string {
-	data, _, _ := serverconfig.ReadFile(filepath.Join(m.d.ServerDataDir, "thefeed.env"))
+	data, _, _ := serverconfig.ReadFile(admin.EnvFile(m.d.ServerDataDir))
 	v, _ := serverconfig.ParseEnv(data).Get(key)
 	return v
 }
