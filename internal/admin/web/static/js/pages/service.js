@@ -94,7 +94,7 @@
         `<button class="btn${cls ? ` ${cls}` : ''}" type="button" data-act="svc" data-a="${a}" data-k="svc-${a}"${off}>${busy === a ? esc(C(a).busy) : label}</button>`).join('')}</div></div>`;
     const line = busy ? C(busy).busy : said ? said[0] : svc.last ? `${svc.last.text} at ${when(svc.last.at)}.` : '';
 
-    const v = esc(svc.version), prev = esc(svc.previous);
+    const w = svcWords(svc), v = esc(svc.version), prev = esc(svc.previous);
     const version = row(`${v || 'thefeed-server'} installed`,
       (svc.update ? `${esc(svc.latest)} is available. Updating restarts the server.` : svc.latest ? 'The newest release.' : `Couldn't check ${esc(svc.source)} for a newer release.`)
         + (prev ? ` If something broke, go back to ${prev}.` : ''),
@@ -108,14 +108,14 @@
         <p class="st-line"><span class="sdot" aria-hidden="true"></span><b>${st[1]}</b><span>${since().trim()}</span></p>
         <p class="impact">${st[2]}</p>
         <p class="checked${said?.[1] ? ' err' : ''}" role="status">${esc(line)}</p></section>`
-      + (svc.shadowing.length ? Panel.sec('Settings passed as flags', row(esc(svc.shadowing.join(', ')),
-        "thefeed-server's systemd unit passes these, and a flag beats thefeed.env, so changes made here to them don't apply.", [['fix-unit', 'Move into thefeed.env…']])) : '')
-      + Panel.sec('thefeed-server',
+      + (svc.shadowing.length ? Panel.sec(w.shadow, row(esc(svc.shadowing.join(', ')), w.shadowWhy,
+        svc.fixUnit ? [['fix-unit', 'Move into thefeed.env…']] : [])) : '')
+      + Panel.sec(w.title,
         (svc.state === 'running' ? row('Answering queries', 'Yes. Stopping keeps the process up but silent.', [['pause', 'Stop answering…']])
           : svc.state === 'paused' ? row('Answering queries', `No${svc.since ? `,${since()}` : ''}. Readers get no answers.`, [['resume', 'Resume answering', '']]) : '')
         + (svc.state === 'stopped' ? row('Process', `Stopped${since()}. Starting applies saved changes.`, [['start', 'Start server', '']])
           : row('Process', `${svc.started ? `Up ${upFor(svc.started)}` : 'Up'}. Restarting applies saved changes.`, [['restart', 'Restart…'], ['stop', 'Stop…']]))
-        + `<div class="it"><div class="tx"><b id="svc-boot">Start when the machine boots</b><small>${svc.boot ? 'systemd starts it after a reboot.' : 'After a reboot it stays stopped until you start it.'}</small></div>
+        + `<div class="it"><div class="tx"><b id="svc-boot">${w.boot}</b><small>${svc.boot ? w.bootOn :'After a reboot it stays stopped until you start it.'}</small></div>
           <span class="onoff" aria-hidden="true">${svc.boot ? 'On' : 'Off'}</span>
           <button class="sw-btn" type="button" role="switch" aria-checked="${svc.boot}" aria-labelledby="svc-boot" data-act="svc-boot" data-k="sw-boot"${off}><span class="tr"></span></button></div>`)
       + Panel.sec('Version', version + source)
