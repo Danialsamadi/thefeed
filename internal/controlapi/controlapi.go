@@ -158,6 +158,7 @@ type MediaCacheStats struct {
 	Evictions     uint64 `json:"evictions"`
 	MaxFileBytes  int64  `json:"maxFileBytes"`
 	TTLSeconds    int64  `json:"ttlSeconds"`
+	Errors        int64  `json:"errors"` // files it couldn't store in the last 10 minutes, too large ones aside
 }
 
 // RelayStatus is the GitHub relay's health.
