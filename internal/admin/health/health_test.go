@@ -106,7 +106,7 @@ func newPanel(t *testing.T, start time.Time, st *controlapi.Status) *panel {
 	p := &panel{t: t, now: start, srv: &fakeServer{st: st, checks: map[string]*controlapi.CheckResult{}},
 		dns: &fakeDNS{took: map[string]time.Duration{}, err: map[string]error{}}}
 	cfg := admin.Config{AdminDir: t.TempDir(), Clock: admin.ClockFunc(p.clock)}
-	app, err := admin.New(cfg, health.New(p.srv, p.srv, p.dns))
+	app, err := admin.New(cfg, health.New(p.srv, p.dns))
 	if err != nil {
 		t.Fatal(err)
 	}

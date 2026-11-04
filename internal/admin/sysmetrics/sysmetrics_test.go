@@ -163,6 +163,9 @@ func (f fakeServer) Status(context.Context) (*controlapi.Status, error) {
 func (fakeServer) ReloadChannels(context.Context) error     { return errors.New("not used") }
 func (fakeServer) Refresh(context.Context) error            { return errors.New("not used") }
 func (fakeServer) SetAnswering(context.Context, bool) error { return errors.New("not used") }
+func (fakeServer) Check(context.Context, string) (*controlapi.CheckResult, error) {
+	return nil, errors.New("not used")
+}
 
 // sample takes one 10-second sample at the current time.
 func (r *rig) sample() { r.fire(10 * time.Second) }

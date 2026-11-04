@@ -57,6 +57,9 @@ func (f *fakeServer) Refresh(context.Context) error        { panic("not used") }
 func (f *fakeServer) SetAnswering(context.Context, bool) error {
 	panic("not used")
 }
+func (f *fakeServer) Check(context.Context, string) (*controlapi.CheckResult, error) {
+	panic("not used")
+}
 
 // fakeDNS answers NS checks from tables.
 type fakeDNS struct {

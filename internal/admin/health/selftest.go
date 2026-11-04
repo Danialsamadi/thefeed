@@ -21,8 +21,7 @@ import (
 // Module is the health module on the real server: its control socket, and
 // its DNS listener with the key from thefeed.env.
 func Module(d *admin.Deps) error {
-	c := controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName))
-	return New(c, c.(controlapi.Checker), feedQuery{filepath.Join(d.ServerDataDir, "thefeed.env")})(d)
+	return New(controlapi.New(filepath.Join(d.ServerDataDir, controlapi.SocketName)), feedQuery{filepath.Join(d.ServerDataDir, "thefeed.env")})(d)
 }
 
 // feedQuery is the real SelfTest: the feed's first metadata block, asked
