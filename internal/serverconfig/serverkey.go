@@ -52,6 +52,9 @@ func LoadOrCreateServerKey(dataDir string) (ed25519.PrivateKey, error) {
 	if err := os.WriteFile(path, []byte(enc+"\n"), 0o600); err != nil {
 		return nil, fmt.Errorf("write server key %s: %w", path, err)
 	}
+	if err := chownLike(path, dataDir); err != nil {
+		return nil, fmt.Errorf("server key %s: %w", path, err)
+	}
 	return priv, nil
 }
 
