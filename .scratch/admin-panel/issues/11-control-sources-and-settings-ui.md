@@ -1,6 +1,6 @@
 # 11 Control UI: sources, features and server settings
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 05, 10
 Spec: `.scratch/admin-panel/spec.md`, user stories 58 to 86
 Design: `.scratch/admin-panel/mockup.html`, Control's Telegram channels, X accounts, Messenger, Telegram over DNS, Media relays, Fetching and DNS and domains pages

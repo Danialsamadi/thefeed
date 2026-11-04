@@ -18,6 +18,7 @@
 //     render() {},                // the open section: HTML (use Panel.sec for its groups)
 //     open() {},                  // optional: runs each time it opens, e.g. to load data
 //     escape() {},                // optional: close an in-place editor; true if it did
+//     wait() {},                  // optional: how many of its changes wait for a restart
 //   });
 //   Panel.acts.name = (button, event) => {}   // clicks on [data-act="name"]
 //   Panel.forms.name = form => {}             // submits of form[data-form="name"]
@@ -248,6 +249,7 @@ const Panel = (() => {
     <div class="titles"><h2>${esc(title)}</h2><div class="sub">${esc(sub)}</div></div></div>${extra(view === 'control' ? 'section' : view)}`;
   const sec = (title, inner, note = '') => `<section class="cg"><h3>${title}</h3>${note ? `<p class="note">${note}</p>` : ''}<div class="card">${inner}</div></section>`;
   const summary = s => { const r = s.summary?.() ?? ''; return Array.isArray(r) ? r : [r]; };
+  const waits = s => { const n = s.wait?.() || 0; return n ? `<small class="wait">${plural(n, 'change waits', 'changes wait')} for a restart</small>` : ''; };
 
   // ---------- the app ----------
   function renderNav() {
@@ -270,7 +272,7 @@ const Panel = (() => {
   function renderControl() {
     $('.v-control .list-pane .scroll').innerHTML = head('Control', 'control') + groupSections(sections, GROUPS).map(([g, ss]) => sec(g, ss.map(s => {
       const [text, cls] = summary(s);
-      return `<button class="cl" type="button" data-act="open" data-id="${s.id}" data-k="row-${s.id}"${S.open.control === s.id ? ' aria-current="true"' : ''}><span class="tx"><b>${esc(s.title)}</b><small${cls ? ` class="${cls}"` : ''}>${esc(text)}</small></span><span class="chev" aria-hidden="true"></span></button>`;
+      return `<button class="cl" type="button" data-act="open" data-id="${s.id}" data-k="row-${s.id}"${S.open.control === s.id ? ' aria-current="true"' : ''}><span class="tx"><b>${esc(s.title)}</b><small${cls ? ` class="${cls}"` : ''}>${esc(text)}</small>${waits(s)}</span><span class="chev" aria-hidden="true"></span></button>`;
     }).join(''))).join('');
     const s = sections.find(s => s.id === S.open.control);
     $('.v-control .thread-pane .scroll').innerHTML = s
