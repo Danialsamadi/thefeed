@@ -1,6 +1,6 @@
 # 10 Settings, waiting changes and source lists API
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01, 02, 04
 Spec: `.scratch/admin-panel/spec.md`, "Configuration: one source of truth" and the Panel JSON API's Settings, Lists and Domains
 
