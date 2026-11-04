@@ -1,6 +1,6 @@
 # 06 Health engine, uptime, incidents, Board and feature APIs
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 03, 04
 Spec: `.scratch/admin-panel/spec.md`, sections "Health, uptime and incidents" and the Panel JSON API's Board, Feature and Checks
 
