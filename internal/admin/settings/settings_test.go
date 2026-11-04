@@ -812,3 +812,22 @@ func TestTheNSCheckSaysWhichDomainsPointHere(t *testing.T) {
 		t.Errorf("m.example.com = %+v, want the lookup error", d)
 	}
 }
+
+// Behind 1:1 NAT the public address is on no interface, but it's the one
+// the operator reached the panel at.
+func TestTheNSCheckCountsTheAddressThePanelWasReachedAt(t *testing.T) {
+	p := newPanel(t, map[string]string{"thefeed.env": "THEFEED_DOMAIN=t.example.com\n"})
+	p.srv.config["dns.domain"] = "t.example.com"
+	p.dns.ns = map[string][]string{"t.example.com": {"ns1.example.com"}}
+	p.dns.addrs = map[string][]string{"ns1.example.com": {"203.0.113.7"}, "panel.test": {"203.0.113.7"}}
+	p.dns.here = []string{"127.0.0.1", "10.0.0.5"}
+
+	w := p.do("POST", "/api/domains/check", map[string]any{})
+	var got struct{ Domains []domain }
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if len(got.Domains) != 1 || !got.Domains[0].PointsHere {
+		t.Errorf("domains = %+v, want t.example.com pointing here: panel.test is 203.0.113.7", got.Domains)
+	}
+}
