@@ -1,6 +1,6 @@
 # 04 thefeed-admin service skeleton, storage, HTTPS and sign-in API
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: none
 Spec: `.scratch/admin-panel/spec.md`, sections "Shape", "Network and TLS", "The panel's own storage", "Authentication" and "Panel JSON API" (Auth, Account, Action record)
 
