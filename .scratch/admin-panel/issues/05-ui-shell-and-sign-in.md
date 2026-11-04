@@ -1,6 +1,6 @@
 # 05 Panel UI shell, sign-in screens, Account and Appearance
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 04
 Spec: `.scratch/admin-panel/spec.md`, the Solution, "Shape" (no build step, embedded) and user stories 1 to 15, 21, 25, 26 and 87 to 92
 Design: `.scratch/admin-panel/mockup.html`, the approved mockup. Copy its tokens, layout, copy and states; don't redesign.

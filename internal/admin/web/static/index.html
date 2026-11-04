@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>thefeed admin</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/admin.css">
+<!-- The shell first, then one script per page: each page registers itself
+     with Panel (see the top of shell.js). -->
+<script src="/static/js/util.js" defer></script>
+<script src="/static/js/shell.js" defer></script>
+<script src="/static/js/pages/account.js" defer></script>
+<script src="/static/js/pages/appearance.js" defer></script>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="app-in" hidden>
+    <nav class="nav" aria-label="Admin sections"></nav>
+    <section class="view v-board" aria-label="Board">
+      <div class="list-pane"><div class="scroll"></div></div>
+      <div class="thread-pane"><div class="scroll"></div></div>
+    </section>
+    <section class="view v-server" aria-label="Server" hidden><div class="scroll"></div></section>
+    <section class="view v-control" aria-label="Control" hidden>
+      <div class="list-pane"><div class="scroll"></div></div>
+      <div class="thread-pane"><div class="scroll"></div></div>
+    </section>
+  </div>
+  <div class="auth"></div>
+</div>
+</body>
+</html>
