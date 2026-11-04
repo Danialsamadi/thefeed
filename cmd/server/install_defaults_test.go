@@ -486,7 +486,7 @@ func TestReleaseWorkflowBuildsPanelAndPublishesChecksums(t *testing.T) {
 	yml := readFile(t, "../../.github/workflows/build.yml")
 
 	build, _ := workflowStep(t, yml, "./cmd/thefeed-admin")
-	for _, want := range []string{"if: matrix.goos == 'linux'", "-o build/thefeed-admin-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/thefeed-admin"} {
+	for _, want := range []string{`if [ "${{ matrix.goos }}" = "linux" ]`, "-o build/thefeed-admin-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/thefeed-admin"} {
 		if !strings.Contains(build, want) {
 			t.Errorf("thefeed-admin build step lacks %q:\n%s", want, build)
 		}
