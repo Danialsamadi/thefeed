@@ -26,7 +26,9 @@ SERVICE_FILE="/etc/systemd/system/thefeed-server.service"
 ADMIN_SERVICE_FILE="/etc/systemd/system/thefeed-admin.service"
 # --local <dir>: install the release-named binaries a build left in <dir>
 # (thefeed-server-linux-<arch>, thefeed-admin-linux-<arch>) instead of
-# downloading them. The end-to-end suite installs this way.
+# downloading them, and the panel's image from
+# thefeed-admin-image-linux-<arch>.tar (docker save) instead of pulling it.
+# The end-to-end suite installs this way.
 LOCAL_DIR=""
 
 arch() {
@@ -864,6 +866,16 @@ setup_config() {
         [[ "$admin_hostname" =~ $host_re ]] && break
         echo -e "${red}Type a hostname like panel.example.com${plain}"
     done
+    # Yes unless the saved answer is No; install_thefeed acts on it.
+    local admin_docker=1 docker_in="" cur_admin_docker
+    cur_admin_docker=$(env_get THEFEED_ADMIN_DOCKER)
+    if [[ -n "$cur_admin_docker" ]] && ! is_true "$cur_admin_docker"; then
+        read -rp "Run the admin panel in Docker? [y/N]: " docker_in
+        [[ "$docker_in" == "y" || "$docker_in" == "Y" ]] || admin_docker=0
+    else
+        read -rp "Run the admin panel in Docker? [Y/n]: " docker_in
+        [[ "$docker_in" == "n" || "$docker_in" == "N" ]] && admin_docker=0
+    fi
 
     # --- Telegram mode ---
     local cur_no_tg=""
@@ -929,6 +941,7 @@ THEFEED_GITHUB_RELAY_BRANCH=${gh_branch}
 THEFEED_GITHUB_RELAY_MAX_SIZE_KB=${gh_max_size}
 THEFEED_GITHUB_RELAY_TTL_MIN=${gh_ttl}
 THEFEED_ADMIN_HOSTNAME=${admin_hostname}
+THEFEED_ADMIN_DOCKER=${admin_docker}
 THEFEED_ADMIN_RELEASE_REPO=${GITHUB_REPO}
 ENVEOF
         env_finish "$old_env"
@@ -1011,6 +1024,7 @@ THEFEED_GITHUB_RELAY_BRANCH=${gh_branch}
 THEFEED_GITHUB_RELAY_MAX_SIZE_KB=${gh_max_size}
 THEFEED_GITHUB_RELAY_TTL_MIN=${gh_ttl}
 THEFEED_ADMIN_HOSTNAME=${admin_hostname}
+THEFEED_ADMIN_DOCKER=${admin_docker}
 THEFEED_ADMIN_RELEASE_REPO=${GITHUB_REPO}
 ENVEOF
     env_finish "$old_env"
@@ -1129,21 +1143,82 @@ StandardError=journal
 WantedBy=multi-user.target
 SVCEOF
     systemctl daemon-reload
+    open_panel_port
+}
 
-    # Browsers and Let's Encrypt reach the panel on 443.
+# Browsers and Let's Encrypt reach the panel on 443.
+open_panel_port() {
     if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
         ufw allow 443/tcp
     fi
 }
 
+# Installs Docker from the OS packages. Where there's none it says what to do
+# and returns 1.
+install_docker() {
+    echo -e "${green}Installing Docker...${plain}"
+    case "${release}" in
+        ubuntu | debian | armbian) apt-get update && apt-get install -y -q docker.io ;;
+        fedora) dnf install -y -q moby-engine ;;
+        amzn) dnf install -y -q docker ;;
+        *)
+            echo -e "${yellow}No Docker package for ${release} here. Install Docker (https://docs.docker.com/engine/install/), then run this again.${plain}"
+            return 1 ;;
+    esac
+}
+
+# Runs the panel as the thefeed-admin container in place of its unit, with
+# Docker installed when it's missing. The image is release $1's, or with
+# --local the archive a build left. Returns 1 when there's no Docker or no
+# image, and the caller installs the unit instead.
+run_admin_container() {
+    local image owner tar
+    command -v docker >/dev/null 2>&1 || install_docker || return 1
+    systemctl enable --now docker
+    if [[ -n "$LOCAL_DIR" ]]; then
+        tar="${LOCAL_DIR}/thefeed-admin-image-linux-$(arch).tar"
+        echo -e "${green}Loading the panel image from ${tar}...${plain}"
+        image=$(docker load -i "$tar" | sed -nE 's/^Loaded image( ID)?: //p' | tail -1)
+    else
+        owner=$(printf '%s' "${GITHUB_REPO%%/*}" | tr '[:upper:]' '[:lower:]')
+        image="ghcr.io/${owner}/thefeed-admin:$1"
+        docker pull "$image" || image=""
+    fi
+    if [[ -z "$image" ]]; then
+        echo -e "${yellow}No panel image: running the panel as a systemd service instead.${plain}"
+        return 1
+    fi
+    if [[ -f "$ADMIN_SERVICE_FILE" ]]; then
+        systemctl disable --now thefeed-admin
+        rm -f "$ADMIN_SERVICE_FILE"
+        systemctl daemon-reload
+    fi
+    docker rm -f thefeed-admin >/dev/null 2>&1
+    docker run -d --name thefeed-admin --restart unless-stopped --privileged --pid host --network host \
+        -v /var/run/docker.sock:/var/run/docker.sock -v "${INSTALL_DIR}:${INSTALL_DIR}" \
+        -v /etc/systemd/system:/etc/systemd/system -e THEFEED_ADMIN_SERVER=systemd "$image" || return 1
+    open_panel_port
+}
+
 # Prints how to reach the panel: its URL, the setup code while no admin
 # exists, and the self-signed certificate's fingerprint to check the browser
-# warning against. $1 is when the panel was (re)started, for the journal.
+# warning against. $1 is when the panel was (re)started, for the journal;
+# $2 is true when it runs as a container.
 show_panel() {
     local since="$1" host line="" i url
+    local see="journalctl -u thefeed-admin -n 50 --no-pager"
+    local reset="systemctl stop thefeed-admin && ${INSTALL_DIR}/thefeed-admin reset-admin && systemctl start thefeed-admin"
+    if [[ "$2" == true ]]; then
+        see="docker logs thefeed-admin"
+        reset="docker stop thefeed-admin && docker run --rm -v ${INSTALL_DIR}:${INSTALL_DIR} \$(docker inspect -f '{{.Config.Image}}' thefeed-admin) reset-admin && docker start thefeed-admin"
+    fi
     host=$(env_get THEFEED_ADMIN_HOSTNAME)
     for i in $(seq 1 20); do
-        line=$(journalctl -u thefeed-admin --since "$since" --no-pager -o cat 2>/dev/null | grep 'admin: serving' | tail -1)
+        if [[ "$2" == true ]]; then
+            line=$(docker logs thefeed-admin 2>&1 | grep 'admin: serving' | tail -1)
+        else
+            line=$(journalctl -u thefeed-admin --since "$since" --no-pager -o cat 2>/dev/null | grep 'admin: serving' | tail -1)
+        fi
         [[ -n "$line" ]] && break
         sleep 1
     done
@@ -1152,7 +1227,7 @@ show_panel() {
     echo -e "${green}═══════════════════════════════════════${plain}"
     if [[ -z "$line" ]]; then
         echo -e "${red}The panel did not start. Is something else using port 443?${plain}"
-        echo -e "  See: ${blue}journalctl -u thefeed-admin -n 50 --no-pager${plain}"
+        echo -e "  See: ${blue}${see}${plain}"
         return 0
     fi
     if [[ -n "$host" ]]; then
@@ -1166,7 +1241,7 @@ show_panel() {
         echo -e "  Setup code:   ${green}$(cat "${INSTALL_DIR}/admin/setup-code")${plain} (works once, for 24 hours)"
     else
         echo -e "  Sign in with your admin account. Lost it? Run:"
-        echo -e "    ${blue}systemctl stop thefeed-admin && ${INSTALL_DIR}/thefeed-admin reset-admin && systemctl start thefeed-admin${plain}"
+        echo -e "    ${blue}${reset}${plain}"
     fi
     if [[ -z "$host" ]]; then
         echo -e "  Certificate:  self-signed, SHA-256 fingerprint"
@@ -1307,13 +1382,19 @@ install_thefeed() {
     fi
     install_service
     start_service
-    local panel_since=""
+    local panel_since="" panel_docker=false
     if $have_panel; then
-        install_admin_service
         panel_since=$(date '+%Y-%m-%d %H:%M:%S')
-        systemctl enable thefeed-admin
-        # restart, not start: an update must run the new binary.
-        systemctl restart thefeed-admin
+        if is_true "${THEFEED_ADMIN_DOCKER:-}" && run_admin_container "$version"; then
+            panel_docker=true
+        else
+            # The unit, and no container beside it holding 443.
+            docker rm -f thefeed-admin >/dev/null 2>&1
+            install_admin_service
+            systemctl enable thefeed-admin
+            # restart, not start: an update must run the new binary.
+            systemctl restart thefeed-admin
+        fi
     fi
 
     echo -e "\n${green}═══════════════════════════════════════${plain}"
@@ -1323,7 +1404,7 @@ install_thefeed() {
 
     # Print the import URI so the operator can share/import the feed right away.
     show_config
-    $have_panel && show_panel "$panel_since"
+    $have_panel && show_panel "$panel_since" "$panel_docker"
     return 0
 }
 
@@ -1371,13 +1452,18 @@ show_config() {
 uninstall_thefeed() {
     echo -e "${yellow}Uninstalling thefeed...${plain}"
 
-    local unit
+    local unit image
     for unit in thefeed-admin thefeed-server; do
         systemctl stop "$unit" 2>/dev/null || true
         systemctl disable "$unit" 2>/dev/null || true
     done
     rm -f "$SERVICE_FILE" "$ADMIN_SERVICE_FILE"
     systemctl daemon-reload
+    if command -v docker >/dev/null 2>&1; then
+        image=$(docker inspect -f '{{.Config.Image}}' thefeed-admin 2>/dev/null)
+        docker rm -f thefeed-admin >/dev/null 2>&1
+        [[ -n "$image" ]] && docker rmi "$image" >/dev/null 2>&1
+    fi
 
     local remove_data=""
     if [[ -t 0 ]]; then
@@ -1411,7 +1497,7 @@ show_help() {
     echo -e "  ${green}--list${plain}                 List recent releases with stable/pre labels"
     echo -e "  ${green}--source <name>${plain}        Pick release mirror: github | gitlab | auto (default: auto)"
     echo -e "  ${green}--github${plain} / ${green}--gitlab${plain}     Shortcut for --source github / --source gitlab"
-    echo -e "  ${green}--local <dir>${plain}          Install <dir>/thefeed-{server,admin}-linux-<arch> instead of downloading (testing)"
+    echo -e "  ${green}--local <dir>${plain}          Install <dir>/thefeed-{server,admin}-linux-<arch> and thefeed-admin-image-linux-<arch>.tar instead of downloading (testing)"
     echo -e "  ${green}--login${plain}                Re-authenticate with Telegram"
     echo -e "  ${green}--config${plain}               Print the current server config import URI (domain, key, sk=, resolvers)"
     echo -e "  ${green}--uninstall${plain}            Remove thefeed and its admin panel"
