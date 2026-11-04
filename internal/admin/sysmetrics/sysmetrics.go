@@ -103,7 +103,8 @@ func Module(d *admin.Deps) error {
 		Root:   os.DirFS("/"),
 		Statfs: statfs,
 		Exchange: func(ctx context.Context, q *dns.Msg, server string) (*dns.Msg, error) {
-			a, _, err := new(dns.Client).ExchangeContext(ctx, q, server)
+			// The context can only shorten the client's own 2-second default.
+			a, _, err := (&dns.Client{Timeout: 5 * time.Second}).ExchangeContext(ctx, q, server)
 			return a, err
 		},
 		Every: func(every time.Duration, f func()) {
