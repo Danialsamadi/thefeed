@@ -17,6 +17,7 @@ import (
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
 
+	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
 )
 
@@ -83,6 +84,7 @@ type TelegramReader struct {
 	api   *tg.Client
 
 	refreshCh chan struct{} // signals Run() to re-fetch immediately
+	cycles    cycleLog      // for the control endpoint
 }
 
 // SetFetchInterval overrides the default 10m fetch cadence.
@@ -263,7 +265,7 @@ func (tr *TelegramReader) fetchAll(ctx context.Context, api *tg.Client) {
 	log.Printf("[telegram] fetch cycle started for %d public + %d private channels",
 		len(tr.channels), privateCount)
 	start := time.Now()
-	var fetched, failed, skipped int
+	var fetched, failed, skipped, posts int
 	tr.mu.RLock()
 	cacheTTL := tr.cacheTTL
 	tr.mu.RUnlock()
@@ -303,6 +305,7 @@ func (tr *TelegramReader) fetchAll(ctx context.Context, api *tg.Client) {
 			failed++
 			continue
 		}
+		posts += len(msgs)
 
 		// Update cache
 		tr.mu.Lock()
@@ -359,6 +362,7 @@ func (tr *TelegramReader) fetchAll(ctx context.Context, api *tg.Client) {
 			failed++
 			continue
 		}
+		posts += len(msgs)
 		tr.mu.Lock()
 		tr.cache[cacheKey] = cachedMessages{msgs: msgs, fetched: time.Now()}
 		tr.mu.Unlock()
@@ -372,6 +376,8 @@ func (tr *TelegramReader) fetchAll(ctx context.Context, api *tg.Client) {
 	log.Printf("[telegram] fetch cycle done in %s: %d fetched, %d failed, %d skipped, %d total",
 		time.Since(start).Round(time.Millisecond), fetched, failed, skipped,
 		len(tr.channels)+privateCount)
+	tr.cycles.add(controlapi.FetchCycle{Start: start, DurationMs: time.Since(start).Milliseconds(),
+		Fetched: fetched + skipped, Total: fetched + failed + skipped, Posts: posts})
 	// Profile pics piggyback the regular cycle: best-effort, doesn't
 	// gate channel data. Each channel's photo is downloaded once and
 	// only re-fetched when Telegram reports a different photo ID.
