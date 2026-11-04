@@ -449,6 +449,7 @@ SERVER_SETTINGS=(
     "THEFEED_FETCH_INTERVAL|fetch-interval|10"
     "THEFEED_ALLOW_MANAGE|allow-manage|false"
     "THEFEED_DEBUG|debug|false"
+    "THEFEED_CONTROL_SOCKET|control-socket|true"
     "THEFEED_DNS_MEDIA_ENABLED|dns-media-enabled|false"
     "THEFEED_DNS_MEDIA_MAX_SIZE_KB|dns-media-max-size|100"
     "THEFEED_DNS_MEDIA_CACHE_TTL_MIN|dns-media-cache-ttl|600"
