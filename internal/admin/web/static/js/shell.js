@@ -53,8 +53,10 @@ const Panel = (() => {
     host: location.hostname,
     view: 'board',
     open: { board: null, control: null },
-    // Live numbers move; with reduced motion asked for, they start paused.
-    paused: matchMedia('(prefers-reduced-motion: reduce)').matches,
+    // Live from the start, reduced motion or not: a number that changes
+    // isn't motion (the CSS drops the animations), and a paused Board goes
+    // stale beside the feature pages, which load fresh.
+    paused: false,
     conn: 'live', downAt: '', retrying: false, retryMsg: '',
     theme: 'dark',
     err: {}, busy: '', lockedUntil: 0, shown: {}, authMsg: '', flash: '',
