@@ -81,6 +81,12 @@ html, body { height: 100%; background: #17212b; }
 .pin small { display: block; color: var(--dim); font-size: 12px; }
 .pin b { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pin b i { font-style: normal; font-size: 12px; color: var(--dim); font-weight: 500; margin-left: 2px; }
+/* Four across needs about 380px ("1,968 MB"); a narrower list stacks them two by two. */
+.list-pane { container: list / inline-size; }
+@container list (max-width: 399px) {
+  .pin { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 10px; }
+  .pin > span:nth-child(3) { border-left: 0; }
+}
 
 /* list */
 .group-h { padding: 16px 16px 6px; font-size: 13px; color: var(--dim); font-weight: 500; }
