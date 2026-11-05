@@ -371,6 +371,52 @@ const Panel = (() => {
     if (e.target.matches('input, textarea, select')) return;
     closeRow();
   });
+  // ---------- the list's width ----------
+  // The divider between the list and the page drags, takes arrow keys
+  // (Shift for bigger steps) or Home and End, and resets on a double-click.
+  // One width for the Board and Control, kept in this browser.
+  const LIST_W = 'thefeed-admin.list-w';
+  try { const w = localStorage.getItem(LIST_W); if (w) root.style.setProperty('--list-w', w); } catch {}
+  function keepListW() {
+    try {
+      const w = root.style.getPropertyValue('--list-w');
+      if (w) localStorage.setItem(LIST_W, w); else localStorage.removeItem(LIST_W);
+    } catch {}
+  }
+  // setListW sets the list to px, within what the CSS allows: 260px, and
+  // the page at least 320px.
+  function setListW(split, px) {
+    const max = split.closest('.view').clientWidth - 320;
+    px = Math.round(Math.max(260, Math.min(px, max)));
+    root.style.setProperty('--list-w', px + 'px');
+    split.setAttribute('aria-valuemin', 260);
+    split.setAttribute('aria-valuemax', Math.max(260, max));
+    split.setAttribute('aria-valuenow', px);
+  }
+  const listLeft = split => split.parentElement.getBoundingClientRect().left;
+  const listWidth = split => split.parentElement.getBoundingClientRect().width;
+  for (const split of root.querySelectorAll('.split')) {
+    split.addEventListener('focus', () => setListW(split, listWidth(split)));
+    split.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      split.setPointerCapture(e.pointerId);
+      root.classList.add('resizing');
+    });
+    split.addEventListener('pointermove', e => {
+      if (split.hasPointerCapture(e.pointerId)) setListW(split, e.clientX - listLeft(split));
+    });
+    split.addEventListener('lostpointercapture', () => { root.classList.remove('resizing'); keepListW(); });
+    split.addEventListener('keydown', e => {
+      const step = e.shiftKey ? 80 : 20, now = listWidth(split);
+      const to = { ArrowLeft: now - step, ArrowRight: now + step, Home: 0, End: Infinity }[e.key];
+      if (to === undefined) return;
+      e.preventDefault();
+      setListW(split, to);
+      keepListW();
+    });
+    split.addEventListener('dblclick', () => { root.style.removeProperty('--list-w'); keepListW(); });
+  }
+
   document.addEventListener('DOMContentLoaded', boot);
 
   return {

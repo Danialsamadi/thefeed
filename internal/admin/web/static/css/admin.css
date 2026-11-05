@@ -37,6 +37,7 @@ html, body { height: 100%; background: #17212b; }
 .app-in { display: grid; grid-template-columns: minmax(0, 1fr); height: 100%; }
 .view { min-height: 0; height: 100%; overflow: hidden; }
 .list-pane, .thread-pane { height: 100%; min-height: 0; }
+.split { display: none; } /* the divider, from two panes on */
 .app button:disabled { opacity: .5; cursor: not-allowed; }
 .seg button:active:not(:disabled), .back:active, .livebtn:active:not(:disabled), .step button:active:not(:disabled) { transform: scale(.97); }
 .scroll { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 104px; }
@@ -337,8 +338,14 @@ details.it .body code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, mono
   .nav button { flex: none; height: 64px; }
   .app.has-thread .nav { display: flex; }
   .scroll { padding-bottom: 24px; }
-  .v-board, .v-control { display: grid; grid-template-columns: 300px minmax(0, 1fr); }
-  .app .list-pane, .app.has-thread .list-pane { display: block; border-right: 1px solid var(--line); }
+  /* --list-w is the width the divider set; the page keeps at least 320px. */
+  .v-board, .v-control { display: grid; grid-template-columns: clamp(260px, var(--list-w, 300px), calc(100% - 320px)) minmax(0, 1fr); }
+  .app .list-pane, .app.has-thread .list-pane { display: block; border-right: 1px solid var(--line); position: relative; }
+  .split { display: block; position: absolute; top: 0; bottom: 0; right: -6px; width: 12px; z-index: 2; cursor: col-resize; touch-action: none; }
+  .app .split:focus-visible { outline: 0; }
+  .split::after { content: ''; position: absolute; top: 0; bottom: 0; left: 5px; width: 2px; transition: background 120ms var(--ease); }
+  .split:hover::after, .split:focus-visible::after, .resizing .split::after { background: var(--accent); }
+  .resizing { cursor: col-resize; user-select: none; }
   .thread-pane { display: block; }
   .back { display: none; }
   .thread-pane .bar { padding-left: 16px; }
@@ -352,7 +359,7 @@ details.it .body code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, mono
   .nav button { flex-direction: row; justify-content: flex-start; gap: 12px; height: 48px; padding: 0 14px; font-size: 15px; border-radius: 12px; }
   .nav button[aria-current="page"] { background: var(--surface2); }
   .nav .count { position: static; margin-left: auto; }
-  .v-board, .v-control { grid-template-columns: 360px minmax(0, 1fr); }
+  .v-board, .v-control { grid-template-columns: clamp(260px, var(--list-w, 360px), calc(100% - 320px)) minmax(0, 1fr); }
   .v-server .scroll { max-width: none; }
   .srv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .srv-grid .sec:nth-child(odd) { border-right: 1px solid var(--line); }
