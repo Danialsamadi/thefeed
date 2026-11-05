@@ -1,0 +1,16 @@
+Name:	thefeed-server
+Umask:	0022
+State:	S (sleeping)
+Tgid:	4242
+Ngid:	0
+Pid:	4242
+PPid:	1
+FDSize:	64
+VmPeak:	 1500000 kB
+VmSize:	 1450000 kB
+VmLck:	       0 kB
+VmHWM:	  400000 kB
+VmRSS:	  393216 kB
+RssAnon:	  380000 kB
+RssFile:	   13216 kB
+Threads:	12

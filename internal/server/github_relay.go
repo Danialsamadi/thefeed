@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sartoopjj/thefeed/internal/controlapi"
 	"github.com/sartoopjj/thefeed/internal/protocol"
 )
 
@@ -425,19 +426,9 @@ func (g *GitHubRelay) Upload(ctx context.Context, body []byte) error {
 	return nil
 }
 
-// RelayStatus is a snapshot of relay health for the hourly report.
-type RelayStatus struct {
-	Repo         string  `json:"repo"`
-	RepoSizeKB   int64   `json:"repoSizeKB"`
-	QuotaKB      int64   `json:"quotaKB"`
-	PercentUsed  float64 `json:"percentUsed"`
-	PendingFiles int     `json:"pendingFiles"`
-	KnownObjects int     `json:"knownObjects"`
-	Quota403     bool    `json:"quotaExhausted"`
-	TokenDenied  bool    `json:"tokenDenied"`
-	FailStreak   int     `json:"failStreak"`
-	LastError    string  `json:"lastError,omitempty"`
-}
+// RelayStatus is a snapshot of relay health for the hourly report and the
+// control API, where it is defined.
+type RelayStatus = controlapi.RelayStatus
 
 // Status reports relay health. Uses the last polled repo size; call
 // RefreshRepoSize to update it.
@@ -609,6 +600,12 @@ func (g *GitHubRelay) probeRecovery(ctx context.Context) {
 	if !healthy || prev {
 		return
 	}
+	g.resumeLocked()
+}
+
+// resumeLocked leaves a parked state: the remote is usable again. Caller
+// must hold g.mu.
+func (g *GitHubRelay) resumeLocked() {
 	g.failStreak = 0
 	g.retryAfter = time.Time{}
 	g.quotaExhausted = false

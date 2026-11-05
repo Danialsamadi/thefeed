@@ -110,34 +110,41 @@ sudo bash -c "$(curl -Ls https://raw.githubusercontent.com/sartoopjj/thefeed/mai
 
 #### Option B — Docker
 
-No Go toolchain needed. Base image `alpine:3.21` (~23 MB), runs as non-root `thefeed` (UID 1000).
+No Go toolchain needed. Two containers from prebuilt images (amd64 and arm64): `thefeed-server`, which runs as non-root UID 1000, and `thefeed-admin`, the web panel.
+
+Settings live in `data/thefeed.env` (from `.env.example`). The server and the panel read it themselves, and the panel edits it. The panel writes the server's image tag to `.env` next to `docker-compose.yml` when it updates or rolls back.
 
 ```bash
-# 1. Configure — set THEFEED_DOMAIN and THEFEED_KEY (uncomment Telegram vars if you need private channels)
-cp .env.example .env && nano .env
+# 1. Get the compose file and the examples
+git clone https://github.com/sartoopjj/thefeed /opt/thefeed && cd /opt/thefeed
 
-# 2. Add your channels
-mkdir -p data
+# 2. Configure: set THEFEED_DOMAIN and THEFEED_KEY
+mkdir -p data && cp .env.example data/thefeed.env
+printf 'THEFEED_LISTEN=:5300\nTHEFEED_NO_TELEGRAM=1\n' >> data/thefeed.env
+nano data/thefeed.env
+
+# 3. Add your channels; the server must own its data
 cp configs/channels.txt data/
 cp configs/x_accounts.txt data/   # optional
+sudo chown -R 1000:1000 data
 
-# 3. Build and run (listens on :5300/udp inside the container)
+# 4. Run, and get the panel's address and one-time setup code
 docker compose up -d
-docker compose logs -f
-
-# 4. Print the client import config (the thefeed:// URI — domain, key, server key sk=,
-#    resolvers) to hand to your users, just like the script prints at the end:
-docker compose run --rm server --print-config --data-dir /data --domain YOUR_DOMAIN --key YOUR_KEY
+docker logs thefeed-admin
 ```
 
-Then set up the [port 53 redirect](#port-53) below. For private channels, do a one-time interactive login first:
+The panel is at `https://<your server>/` on port 443, with a self-signed certificate unless you set `THEFEED_ADMIN_HOSTNAME` in `data/thefeed.env`. Open it, enter the setup code, and create the admin account. From there it edits settings and channels, restarts, updates and rolls back the server container, and shows its logs. It also shows the client import link, or print it with `docker compose run --rm server --data-dir /data --print-config`.
+
+Don't give the server `environment:`, `env_file:` or settings flags in `docker-compose.yml`: they beat `thefeed.env`, and the panel's changes would be ignored.
+
+Then set up the [port 53 redirect](#port-53) below. For private channels, put `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` and `TELEGRAM_PHONE` in `data/thefeed.env`, set `THEFEED_NO_TELEGRAM=false`, then log in once and restart:
 
 ```bash
-docker compose run -it --rm server --login-only --data-dir /data \
-  --domain YOUR_DOMAIN --key YOUR_KEY \
-  --api-id YOUR_API_ID --api-hash YOUR_HASH --phone YOUR_PHONE
-# then remove --no-telegram from docker-compose.yml, add the Telegram flags, and `docker compose up -d`
+docker compose run -it --rm server --data-dir /data --login-only
+docker compose restart server
 ```
+
+Update the panel with `docker compose pull admin && docker compose up -d`. To build the images from source instead, uncomment the `build:` lines in `docker-compose.yml` and run `docker compose up -d --build`.
 
 ### Port 53
 
@@ -444,6 +451,40 @@ make ios-build   # build the app for the Simulator
 Then open `ios/Thefeed.xcodeproj` in Xcode to run on a device.
 
 **Releases:** pushing a tag starting with `v` triggers a CI build + release. A tag containing `-` (e.g. `v1.4.0-rc1`) is marked pre-release automatically. Assets include server/client binaries for every platform plus the Android APKs (`arm64-v8a`, `armeabi-v7a`).
+
+### End-to-end tests
+
+`make e2e` builds the server and admin panel, installs them on the machine it runs on with `scripts/install.sh --local build/e2e`, and drives the panel's HTTPS API. It covers first run, a restart, a live channel, stopping answers (checked with real DNS queries), stop and start, update and rollback from a local fake release, and the login lockout. Then it uninstalls everything. CI runs it on every pull request (`.github/workflows/e2e.yml`).
+
+`E2E_SETUP` picks how thefeed runs, and CI runs all three:
+
+- `script-docker` (the default): `install.sh` with the panel in Docker, its default answer;
+- `script-systemd`: `install.sh` with the panel as a systemd service;
+- `compose`: `docker-compose.yml` in a temporary directory, with the images pushed to a local registry on `localhost:5000`. Update and rollback change the server's image tag.
+
+For example: `make e2e E2E_SETUP=compose`.
+
+It's not part of `go test ./...`: it sits behind the `e2e` build tag. It needs:
+
+- Linux with systemd;
+- `sudo`;
+- Docker with BuildKit, usable without `sudo` (`make e2e` builds the panel's image);
+- port 443 and `127.0.0.1:5300` free, and port 5000 for `compose`;
+- no thefeed installed or running in Docker, or it refuses to run.
+
+Use a throwaway VM or a container that runs systemd as PID 1, never a real server. For example, with [Multipass](https://multipass.run):
+
+```bash
+multipass launch 24.04 --name thefeed-e2e --memory 2G --disk 10G
+multipass shell thefeed-e2e
+# inside the VM: install Go 1.26+ (https://go.dev/dl), make, and Docker
+# (sudo apt install docker.io docker-buildx; sudo usermod -aG docker $USER,
+# then log in again), copy this checkout in (git clone, or multipass
+# transfer), then in it:
+make e2e
+```
+
+A run cut short (Ctrl-C, a timeout) leaves the install behind, and the next run refuses to start. Clear it with `sudo bash scripts/install.sh --uninstall && sudo rm -rf /opt/thefeed`, and `docker rm -f thefeed-server thefeed-admin thefeed-e2e-registry`.
 
 ---
 

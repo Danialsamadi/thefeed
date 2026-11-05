@@ -121,7 +121,7 @@ jobs:
               versioninfo.json)
           done
 
-      - name: Build Server
+      - name: Build Server and Admin
         if: matrix.goos != 'android'
         env:
           GOOS: ${{ matrix.goos }}
@@ -140,6 +140,11 @@ jobs:
           ext=""
           if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
           go build -trimpath -ldflags="${LDFLAGS}" -o build/thefeed-server-${{ matrix.goos }}-${{ matrix.goarch }}${ext} ./cmd/server
+          # The admin panel runs beside the server under systemd, so Linux
+          # only. install.sh downloads it by this name.
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            go build -trimpath -ldflags="${LDFLAGS}" -o build/thefeed-admin-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/thefeed-admin
+          fi
 
       - name: Build Client
         env:
@@ -237,6 +242,56 @@ jobs:
         with:
           name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
           path: build/
+
+  # Container images for docker-compose.yml and install.sh, pushed to GHCR
+  # for a release tag (the e2e workflow builds them for pull requests). The
+  # Dockerfile cross-compiles Go, so QEMU runs just the runtime stage.
+  images:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - image: thefeed-server
+            target: server
+          - image: thefeed-admin
+            target: admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Tags and version
+        id: meta
+        run: |
+          # Image names must be lowercase; expressions can't lowercase.
+          # latest is the newest stable release, never an -rc or -beta.
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.image }}"
+          tags="${image}:${GITHUB_REF_NAME}"
+          case "$GITHUB_REF_NAME" in *-*) ;; *) tags="${tags},${image}:latest" ;; esac
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+            DATE=${{ steps.meta.outputs.date }}
 
   android-apk:
     needs: test
@@ -460,7 +515,7 @@ jobs:
           path: build/thefeed-macos-*.dmg
 
   release:
-    needs: [build, android-apk, ios-ipa, macos-dmg]
+    needs: [build, images, android-apk, ios-ipa, macos-dmg]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -469,6 +524,16 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # One "<sha256>  <name>" line per asset, hashed as published (after
+      # UPX). The admin panel refuses an update whose file doesn't match.
+      # The glob expands before the redirect creates the file, so it never
+      # lists itself.
+      - name: Checksums (SHA256SUMS)
+        working-directory: artifacts
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

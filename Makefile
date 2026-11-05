@@ -1,10 +1,11 @@
-.PHONY: all build build-server build-client build-server-dev run-server run-client \
-	print-config print-pubkey report test clean lint fmt vet \
+.PHONY: all build build-server build-admin build-client build-server-dev run-server run-client \
+	print-config print-pubkey report test e2e clean lint fmt vet \
 	ios-bind ios-bind-sim ios-bind-catalyst ios-build ios-test ios-clean ios-list-sims ios-deps \
 	mac-dmg mac-app mac-clean \
 	push push-tags release setup-remotes
 
 BINARY_SERVER = thefeed-server
+BINARY_ADMIN  = thefeed-admin
 BINARY_CLIENT = thefeed-client
 BUILD_DIR = build
 
@@ -37,11 +38,16 @@ CLIENT_GOFLAGS = -trimpath -ldflags="$(LDFLAGS) $$TEL_LDFLAG -X github.com/sarto
 
 all: test build
 
-build: build-server build-client
+build: build-server build-admin build-client
 
 build-server:
 	@mkdir -p $(BUILD_DIR)
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_SERVER) ./cmd/server
+
+# The admin panel that runs beside the server (Linux, systemd).
+build-admin:
+	@mkdir -p $(BUILD_DIR)
+	go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_ADMIN) ./cmd/thefeed-admin
 
 build-client:
 	@mkdir -p $(BUILD_DIR)
@@ -138,6 +144,30 @@ report:
 test:
 	go test -race -count=1 ./...
 
+# The end-to-end suite (e2e/, opt-in): Linux with systemd, Docker, and sudo.
+# Built as you, run as root: it installs these builds on THIS machine with
+# install.sh --local, or runs them with docker compose, drives the panel,
+# then removes it all, so run it only on a disposable host (README,
+# "End-to-end tests"). E2E_SETUP is script-docker, script-systemd or
+# compose. The fake release it updates from offers E2E_TO over E2E_FROM.
+E2E_BUILD = $(BUILD_DIR)/e2e
+E2E_ARCH := $(shell go env GOARCH)
+E2E_FROM = v0.98.0
+E2E_TO   = v0.99.0
+E2E_SETUP ?= script-docker
+e2e_flags = -trimpath -ldflags="-s -w -X github.com/sartoopjj/thefeed/internal/version.Version=$(1)"
+
+e2e:
+	@mkdir -p $(E2E_BUILD)/release
+	go build $(call e2e_flags,$(E2E_FROM)) -o $(E2E_BUILD)/$(BINARY_SERVER)-linux-$(E2E_ARCH) ./cmd/server
+	go build $(call e2e_flags,$(E2E_FROM)) -o $(E2E_BUILD)/$(BINARY_ADMIN)-linux-$(E2E_ARCH) ./cmd/thefeed-admin
+	go build $(call e2e_flags,$(E2E_TO)) -o $(E2E_BUILD)/release/$(BINARY_SERVER)-linux-$(E2E_ARCH) ./cmd/server
+	docker build --target admin -t thefeed-admin:e2e .
+	docker save thefeed-admin:e2e -o $(E2E_BUILD)/thefeed-admin-image-linux-$(E2E_ARCH).tar
+	docker rmi thefeed-admin:e2e
+	go test -c -tags e2e -o $(E2E_BUILD)/e2e.test ./e2e
+	cd e2e && sudo env E2E_SETUP=$(E2E_SETUP) ../$(E2E_BUILD)/e2e.test -test.v -test.timeout 30m
+
 lint: vet
 	@command -v golangci-lint >/dev/null 2>&1 || echo "golangci-lint not found, skipping"
 	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run ./... || true
@@ -157,11 +187,13 @@ build-all: build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-a
 build-linux-amd64:
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_SERVER)-linux-amd64 ./cmd/server
+	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_ADMIN)-linux-amd64 ./cmd/thefeed-admin
 	GOOS=linux GOARCH=amd64 go build $(call CLIENT_GOFLAGS,thefeed-client-{V}-linux-amd64) -o $(BUILD_DIR)/$(BINARY_CLIENT)-linux-amd64 ./cmd/client
 
 build-linux-arm64:
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_SERVER)-linux-arm64 ./cmd/server
+	GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_ADMIN)-linux-arm64 ./cmd/thefeed-admin
 	GOOS=linux GOARCH=arm64 go build $(call CLIENT_GOFLAGS,thefeed-client-{V}-linux-arm64) -o $(BUILD_DIR)/$(BINARY_CLIENT)-linux-arm64 ./cmd/client
 
 build-darwin-amd64:
@@ -506,7 +538,7 @@ release:
 # UPX compression (requires upx in PATH) — only for Linux/Windows binaries
 upx:
 	@command -v upx >/dev/null 2>&1 || { echo "upx not found, skipping compression"; exit 0; }
-	@for f in $(BUILD_DIR)/$(BINARY_SERVER)-linux-* $(BUILD_DIR)/$(BINARY_CLIENT)-linux-* \
+	@for f in $(BUILD_DIR)/$(BINARY_SERVER)-linux-* $(BUILD_DIR)/$(BINARY_ADMIN)-linux-* $(BUILD_DIR)/$(BINARY_CLIENT)-linux-* \
 	          $(BUILD_DIR)/$(BINARY_SERVER)-windows-*.exe $(BUILD_DIR)/$(BINARY_CLIENT)-windows-*.exe \
 	          $(BUILD_DIR)/$(BINARY_CLIENT)-android-*; do \
 		if [ -f "$$f" ]; then echo "UPX: $$f"; upx --best --lzma "$$f" || true; fi \

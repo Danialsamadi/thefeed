@@ -18,12 +18,14 @@ import (
 
 	"github.com/sartoopjj/thefeed/internal/report"
 	"github.com/sartoopjj/thefeed/internal/server"
+	"github.com/sartoopjj/thefeed/internal/serverconfig"
 	"github.com/sartoopjj/thefeed/internal/version"
 )
 
 func main() {
 	dataDir := flag.String("data-dir", "./data", "Data directory for channels, session, and config")
 	listen := flag.String("listen", ":53", "DNS listen address (host:port)")
+	controlSocket := flag.Bool("control-socket", true, "Serve the admin panel's control socket at {data-dir}/control.sock")
 	envFile := flag.String("env-file", "", "Read settings from this file "+
 		"(default: ./.env, then <data-dir>/.env, then <data-dir>/thefeed.env)")
 	domain := flag.String("domain", "", "Main DNS domain (e.g., t.example.com); canonical for relay paths")
@@ -114,14 +116,8 @@ func main() {
 		}
 	}
 	boolEnv := func(name string, val *bool, env string) {
-		if given[name] {
-			return
-		}
-		switch os.Getenv(env) {
-		case "1", "true", "TRUE", "yes":
-			*val = true
-		case "0", "false", "FALSE", "no":
-			*val = false
+		if v, ok := envBool(env); ok && !given[name] {
+			*val = v
 		}
 	}
 	strEnv("data-dir", dataDir, "THEFEED_DATA_DIR")
@@ -131,6 +127,7 @@ func main() {
 	strEnv("x-accounts", xAccountsFile, "THEFEED_X_ACCOUNTS")
 	strEnv("session", sessionPath, "THEFEED_SESSION")
 	boolEnv("no-telegram", noTelegram, "THEFEED_NO_TELEGRAM")
+	boolEnv("control-socket", controlSocket, "THEFEED_CONTROL_SOCKET")
 	// The one-shot actions (--version, --print-config, --print-pubkey,
 	// --report, --login-only) are deliberately NOT settable this way: an
 	// environment variable that makes the server print something and exit
@@ -192,10 +189,20 @@ func main() {
 		return
 	}
 
+	if err := checkSettings(given, os.Getenv); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: invalid settings:\n%v\n", err)
+		os.Exit(1)
+	}
+
 	// Create data directory
 	if err := os.MkdirAll(*dataDir, 0700); err != nil {
 		log.Fatalf("Create data dir: %v", err)
 	}
+
+	// The path settings as set: "" means the default under the data dir, as
+	// in thefeed.env, so the panel doesn't see a change waiting for these.
+	setPaths := map[string]string{"channels": *channelsFile, "private-channels": *privateChannelsFile,
+		"x-accounts": *xAccountsFile, "session": *sessionPath}
 
 	// Default paths relative to data directory
 	if *channelsFile == "" {
@@ -240,10 +247,6 @@ func main() {
 			}
 		}
 	}
-	if *fetchIntervalMin < 3 {
-		fmt.Fprintf(os.Stderr, "Error: --fetch-interval must be at least 3 minutes (got %d)\n", *fetchIntervalMin)
-		os.Exit(1)
-	}
 	if *msgLimit == 15 {
 		if v := os.Getenv("THEFEED_MSG_LIMIT"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -282,6 +285,8 @@ func main() {
 	chatIntEnv := func(flagVal *int, def int, env string) {
 		if *flagVal == def {
 			if v := os.Getenv(env); v != "" {
+				// checkSettings has already held it to the setting's range;
+				// 0 means the default (serverconfig's ZeroIsDefault).
 				if n, err := strconv.Atoi(v); err == nil && n > 0 {
 					*flagVal = n
 				}
@@ -437,7 +442,19 @@ func main() {
 		}
 	}
 
+	// Every overlay above wrote into its flag's variable, so the flags now
+	// hold the running configuration, in thefeed.env's units.
+	effective := map[string]string{}
+	for _, s := range serverconfig.Settings {
+		effective[s.Key] = flag.Lookup(s.Flag).Value.String()
+		if p, ok := setPaths[s.Flag]; ok {
+			effective[s.Key] = p
+		}
+	}
+
 	cfg := server.Config{
+		ControlSocket:       *controlSocket,
+		Effective:           effective,
 		ListenAddr:          *listen,
 		Domain:              *domain,
 		ExtraDomains:        extraDomainList,
