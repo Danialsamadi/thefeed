@@ -92,5 +92,10 @@ check('then removes', nextInstanceOp([a, b, c], [b, c]), { op: 'remove', index: 
 check('then moves into place', nextInstanceOp([b, c, a], [a, b, c]), { op: 'move', index: 2, to: 0 });
 check('done', nextInstanceOp([a, b], [a, b]), null);
 
+// rate: a feed server mostly sends kilobits, which one decimal of Mb/s reads as 0.0.
+check('under 1 Mb/s in kb/s', [rate(0.0367), rate(0.2), rate(0)], [['37', 'kb/s'], ['200', 'kb/s'], ['0', 'kb/s']]);
+check('from 1 Mb/s in Mb/s', [rate(1), rate(2.345)], [['1.0', 'Mb/s'], ['2.3', 'Mb/s']]);
+check('what rounds to 1000 kb/s is 1.0 Mb/s', rate(0.9996), ['1.0', 'Mb/s']);
+
 if (failed) { console.error(`${failed} failed, ${passed} passed`); process.exit(1); }
 console.log(`${passed} passed`);

@@ -64,6 +64,13 @@ function inUnit(b, unit) {
   return unit === 'MB' ? Math.round(b / 2 ** 20).toLocaleString('en') : (b / 2 ** 30).toLocaleString('en', { maximumFractionDigits: 1 });
 }
 
+// rate writes a network rate given in Mb/s as [number, unit]: kb/s under
+// 1 Mb/s, where a feed server mostly runs and one decimal of Mb/s reads 0.0.
+function rate(mbps) {
+  const kb = Math.round(mbps * 1000);
+  return kb < 1000 ? [String(kb), 'kb/s'] : [mbps.toFixed(1), 'Mb/s'];
+}
+
 // span writes a length of time ms the way incidents and states do: "6 min",
 // "2 h 5 min", "26 h", "22 days", rounded down.
 function span(ms) {
