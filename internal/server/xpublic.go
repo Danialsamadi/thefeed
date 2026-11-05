@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -45,6 +47,11 @@ type XPublicReader struct {
 	// result, and when an account's posts last came in.
 	results  map[string]controlapi.Instance
 	lastPost time.Time
+
+	// Guarded by mu: the fetch cycle's number, which turns the instances,
+	// and each account's avatar from its last RSS.
+	cycle   int
+	avatars map[string]string
 }
 
 // SetFetchInterval overrides the default 10m fetch cadence.
@@ -172,10 +179,11 @@ func (xr *XPublicReader) fetchAll(ctx context.Context) {
 	start := time.Now()
 	var fetched, failed, skipped int
 
-	xr.mu.RLock()
+	xr.mu.Lock()
+	xr.cycle++
 	baseCh := xr.baseCh
 	cacheTTL := xr.cacheTTL
-	xr.mu.RUnlock()
+	xr.mu.Unlock()
 
 	for i := range xr.accounts {
 		xr.feed.SetChatInfo(baseCh+i, protocol.ChatTypeX, false)
@@ -192,7 +200,7 @@ func (xr *XPublicReader) fetchAll(ctx context.Context) {
 			continue
 		}
 
-		msgs, title, err := xr.fetchAccount(ctx, account)
+		msgs, title, err := xr.fetchAccount(ctx, i, account)
 		if err != nil {
 			log.Printf("[x] fetch @%s: all instances failed: %v", account, err)
 			failed++
@@ -227,9 +235,32 @@ func (xr *XPublicReader) fetchAll(ctx context.Context) {
 	xr.feed.AfterFetchCycle(ctx)
 }
 
-func (xr *XPublicReader) fetchAccount(ctx context.Context, username string) ([]protocol.Message, string, error) {
+// order is the instances to ask for the cycle's i-th account, in turn: the
+// first one moves on with each account and each cycle, so they share the
+// load. Those resting after HTTP 429 are left out.
+// Plain round robin: weighing instances by latency is the upgrade if one
+// is slow.
+func (xr *XPublicReader) order(i int) []string {
+	xr.mu.RLock()
+	defer xr.mu.RUnlock()
+	n := len(xr.instances)
+	out := make([]string, 0, n)
+	for k := range n {
+		in := xr.instances[(xr.cycle+i+k)%n]
+		if time.Now().Before(xr.results[in].RestUntil) {
+			continue
+		}
+		out = append(out, in)
+	}
+	return out
+}
+
+func (xr *XPublicReader) fetchAccount(ctx context.Context, i int, username string) ([]protocol.Message, string, error) {
 	var lastErr error
-	for _, instance := range xr.instances {
+	if len(xr.instances) > 0 {
+		lastErr = fmt.Errorf("every instance is resting after HTTP 429")
+	}
+	for _, instance := range xr.order(i) {
 		msgs, sources, title, err := xr.tryInstance(ctx, instance, username)
 		if err != nil {
 			lastErr = fmt.Errorf("%s: %w", instance, err)
@@ -254,6 +285,25 @@ func (xr *XPublicReader) fetchAccount(ctx context.Context, username string) ([]p
 	return nil, "", lastErr
 }
 
+// errRateLimited is an instance's HTTP 429: it rests, unasked, until then.
+type errRateLimited struct{ until time.Time }
+
+func (e errRateLimited) Error() string {
+	return fmt.Sprintf("rate limited (HTTP 429), resting %d more min", int(math.Ceil(time.Until(e.until).Minutes())))
+}
+
+// retryAfter is how long a 429's Retry-After (seconds or a date) asks for:
+// a minute to an hour, 10 minutes when it doesn't say.
+func retryAfter(v string, now time.Time) time.Duration {
+	d := 10 * time.Minute
+	if s, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+		d = time.Duration(s) * time.Second
+	} else if t, err := http.ParseTime(v); err == nil {
+		d = t.Sub(now)
+	}
+	return min(max(d, time.Minute), time.Hour)
+}
+
 // tryInstance reads username's posts from one instance, and keeps the
 // result as that instance's latest, for the control endpoint.
 func (xr *XPublicReader) tryInstance(ctx context.Context, instance, username string) ([]protocol.Message, []mediaSource, string, error) {
@@ -262,6 +312,9 @@ func (xr *XPublicReader) tryInstance(ctx context.Context, instance, username str
 	res := controlapi.Instance{Host: instance, OK: err == nil, LatencyMs: time.Since(start).Milliseconds(), At: time.Now()}
 	if err != nil {
 		res.Error = err.Error()
+	}
+	if rl := (errRateLimited{}); errors.As(err, &rl) {
+		res.RestUntil = rl.until
 	}
 	xr.mu.Lock()
 	if xr.results == nil {
@@ -295,9 +348,27 @@ func (xr *XPublicReader) readInstance(ctx context.Context, instance, username st
 		log.Printf("[x] @%s: instance %s: body read error: %v", username, instance, readErr)
 		return nil, nil, "", readErr
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		err := errRateLimited{until: time.Now().Add(retryAfter(resp.Header.Get("Retry-After"), time.Now()))}
+		log.Printf("[x] @%s: instance %s: %v", username, instance, err)
+		return nil, nil, "", err
+	}
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[x] @%s: instance %s: HTTP %s", username, instance, resp.Status)
 		return nil, nil, "", fmt.Errorf("unexpected HTTP status %s", resp.Status)
+	}
+	// The avatar is in the same RSS: the profile-pic step downloads it
+	// without asking the instance for the RSS again.
+	if avatar := extractXAvatarURL(body); avatar != "" {
+		if strings.HasPrefix(avatar, "/") {
+			avatar = strings.TrimSuffix(instance, "/") + avatar
+		}
+		xr.mu.Lock()
+		if xr.avatars == nil {
+			xr.avatars = map[string]string{}
+		}
+		xr.avatars[username] = avatar
+		xr.mu.Unlock()
 	}
 
 	msgs, sources, title, err := parseXRSSMessagesWithMedia(body, username)
