@@ -37,7 +37,7 @@ html, body { height: 100%; background: #17212b; }
 .app-in { display: grid; grid-template-columns: minmax(0, 1fr); height: 100%; }
 .view { min-height: 0; height: 100%; overflow: hidden; }
 .list-pane, .thread-pane { height: 100%; min-height: 0; }
-.split { display: none; } /* the divider, from two panes on */
+.split { display: none; } /* the dividers: the list's from two panes on, the sidebar's from 980px */
 .app button:disabled { opacity: .5; cursor: not-allowed; }
 .seg button:active:not(:disabled), .back:active, .livebtn:active:not(:disabled), .step button:active:not(:disabled) { transform: scale(.97); }
 .scroll { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 104px; }
@@ -341,10 +341,14 @@ details.it .body code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, mono
   /* --list-w is the width the divider set; the page keeps at least 320px. */
   .v-board, .v-control { display: grid; grid-template-columns: clamp(260px, var(--list-w, 300px), calc(100% - 320px)) minmax(0, 1fr); }
   .app .list-pane, .app.has-thread .list-pane { display: block; border-right: 1px solid var(--line); position: relative; }
-  .split { display: block; position: absolute; top: 0; bottom: 0; right: -6px; width: 12px; z-index: 2; cursor: col-resize; touch-action: none; }
+  .list-pane .split { display: block; position: absolute; top: 0; bottom: 0; right: -6px; }
+  .split { width: 12px; z-index: 2; cursor: col-resize; touch-action: none; }
   .app .split:focus-visible { outline: 0; }
+  /* The line lights up; the handle on it is always there, so it reads as something to drag. */
   .split::after { content: ''; position: absolute; top: 0; bottom: 0; left: 5px; width: 2px; transition: background 120ms var(--ease); }
-  .split:hover::after, .split:focus-visible::after, .resizing .split::after { background: var(--accent); }
+  .split::before { content: ''; position: absolute; top: 50%; left: 4px; width: 4px; height: 36px; margin-top: -18px; border-radius: 2px; background: var(--track-edge); z-index: 1; transition: background 120ms var(--ease); }
+  .split:hover::after, .split:focus-visible::after, .split.drag::after,
+  .split:hover::before, .split:focus-visible::before, .split.drag::before { background: var(--accent); }
   .resizing { cursor: col-resize; user-select: none; }
   .thread-pane { display: block; }
   .back { display: none; }
@@ -354,7 +358,10 @@ details.it .body code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, mono
 }
 /* ===== Wide from 980px: labelled rail, roomier list, server sections in two columns ===== */
 @container app (min-width: 980px) {
-  .app-in { grid-template-columns: 196px minmax(0, 1fr); }
+  /* --nav-w is the width the sidebar's divider set; its divider shares its cell, on its edge. */
+  .app-in { grid-template-columns: clamp(160px, var(--nav-w, 196px), 320px) minmax(0, 1fr); }
+  .nav, .split-nav { grid-area: 1 / 1; }
+  .split-nav { display: block; position: relative; justify-self: end; margin-right: -6px; }
   .nav { padding: 18px 12px; }
   .nav button { flex-direction: row; justify-content: flex-start; gap: 12px; height: 48px; padding: 0 14px; font-size: 15px; border-radius: 12px; }
   .nav button[aria-current="page"] { background: var(--surface2); }

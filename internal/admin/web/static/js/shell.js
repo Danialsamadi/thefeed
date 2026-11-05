@@ -371,50 +371,61 @@ const Panel = (() => {
     if (e.target.matches('input, textarea, select')) return;
     closeRow();
   });
-  // ---------- the list's width ----------
-  // The divider between the list and the page drags, takes arrow keys
-  // (Shift for bigger steps) or Home and End, and resets on a double-click.
-  // One width for the Board and Control, kept in this browser.
-  const LIST_W = 'thefeed-admin.list-w';
-  try { const w = localStorage.getItem(LIST_W); if (w) root.style.setProperty('--list-w', w); } catch {}
-  function keepListW() {
+  // ---------- dividers ----------
+  // A divider drags, takes arrow keys (Shift for bigger steps) or Home and
+  // End, and resets on a double-click. The sidebar's sets --nav-w; the
+  // list's sets --list-w, one width for the Board and Control. Each keeps
+  // to the limits the CSS clamps it to, and is kept in this browser.
+  const SPLITS = {
+    nav: { min: 160, max: () => 320, pane: () => $('.nav') },
+    list: { min: 260, max: split => split.closest('.view').clientWidth - 320, pane: split => split.parentElement },
+  };
+  const widthKey = name => `thefeed-admin.${name}-w`;
+  function keepWidth(name) {
     try {
-      const w = root.style.getPropertyValue('--list-w');
-      if (w) localStorage.setItem(LIST_W, w); else localStorage.removeItem(LIST_W);
+      const w = root.style.getPropertyValue(`--${name}-w`);
+      if (w) localStorage.setItem(widthKey(name), w); else localStorage.removeItem(widthKey(name));
     } catch {}
   }
-  // setListW sets the list to px, within what the CSS allows: 260px, and
-  // the page at least 320px.
-  function setListW(split, px) {
-    const max = split.closest('.view').clientWidth - 320;
-    px = Math.round(Math.max(260, Math.min(px, max)));
-    root.style.setProperty('--list-w', px + 'px');
-    split.setAttribute('aria-valuemin', 260);
-    split.setAttribute('aria-valuemax', Math.max(260, max));
-    split.setAttribute('aria-valuenow', px);
-  }
-  const listLeft = split => split.parentElement.getBoundingClientRect().left;
-  const listWidth = split => split.parentElement.getBoundingClientRect().width;
   for (const split of root.querySelectorAll('.split')) {
-    split.addEventListener('focus', () => setListW(split, listWidth(split)));
+    const name = split.dataset.split, d = SPLITS[name], pane = () => d.pane(split).getBoundingClientRect();
+    try { const w = localStorage.getItem(widthKey(name)); if (w) root.style.setProperty(`--${name}-w`, w); } catch {}
+    // value says where the divider is and how far it goes; set moves it.
+    const value = px => {
+      const max = Math.max(d.min, d.max(split));
+      px = Math.round(Math.max(d.min, Math.min(px, max)));
+      split.setAttribute('aria-valuemin', d.min);
+      split.setAttribute('aria-valuemax', max);
+      split.setAttribute('aria-valuenow', px);
+      return px;
+    };
+    const set = px => root.style.setProperty(`--${name}-w`, value(px) + 'px');
+    split.addEventListener('focus', () => value(pane().width));
     split.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
       split.setPointerCapture(e.pointerId);
+      split.classList.add('drag');
       root.classList.add('resizing');
     });
-    split.addEventListener('pointermove', e => {
-      if (split.hasPointerCapture(e.pointerId)) setListW(split, e.clientX - listLeft(split));
+    split.addEventListener('pointermove', e => { if (split.hasPointerCapture(e.pointerId)) set(e.clientX - pane().left); });
+    split.addEventListener('lostpointercapture', () => {
+      split.classList.remove('drag');
+      root.classList.remove('resizing');
+      keepWidth(name);
     });
-    split.addEventListener('lostpointercapture', () => { root.classList.remove('resizing'); keepListW(); });
     split.addEventListener('keydown', e => {
-      const step = e.shiftKey ? 80 : 20, now = listWidth(split);
+      const step = e.shiftKey ? 80 : 20, now = pane().width;
       const to = { ArrowLeft: now - step, ArrowRight: now + step, Home: 0, End: Infinity }[e.key];
       if (to === undefined) return;
       e.preventDefault();
-      setListW(split, to);
-      keepListW();
+      set(to);
+      keepWidth(name);
     });
-    split.addEventListener('dblclick', () => { root.style.removeProperty('--list-w'); keepListW(); });
+    split.addEventListener('dblclick', () => {
+      root.style.removeProperty(`--${name}-w`);
+      keepWidth(name);
+      value(pane().width);
+    });
   }
 
   document.addEventListener('DOMContentLoaded', boot);
