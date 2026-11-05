@@ -39,11 +39,27 @@ arch() {
     esac
 }
 
+# apt-get update, then install $@, waiting out another apt run (on a fresh
+# server, apt's daily update and unattended-upgrades) instead of failing on
+# its lock. dpkg's lock has a timeout setting; the package lists' lock has
+# none, so update retries, for 2 minutes.
+apt_install() {
+    local i
+    for i in {1..12}; do
+        if apt-get update -q; then
+            apt-get -o DPkg::Lock::Timeout=600 install -y -q "$@"
+            return
+        fi
+        sleep 10
+    done
+    return 1
+}
+
 install_base() {
     echo -e "${green}Installing base dependencies...${plain}"
     case "${release}" in
         ubuntu | debian | armbian)
-            apt-get update && apt-get install -y -q curl tar ca-certificates
+            apt_install curl tar ca-certificates
         ;;
         fedora | amzn | rhel | almalinux | rocky | ol)
             dnf -y update && dnf install -y -q curl tar ca-certificates
@@ -62,7 +78,7 @@ install_base() {
             apk update && apk add curl tar ca-certificates bash
         ;;
         *)
-            apt-get update && apt-get install -y -q curl tar ca-certificates
+            apt_install curl tar ca-certificates
         ;;
     esac
 }
@@ -1158,7 +1174,7 @@ open_panel_port() {
 install_docker() {
     echo -e "${green}Installing Docker...${plain}"
     case "${release}" in
-        ubuntu | debian | armbian) apt-get update && apt-get install -y -q docker.io ;;
+        ubuntu | debian | armbian) apt_install docker.io ;;
         fedora) dnf install -y -q moby-engine ;;
         amzn) dnf install -y -q docker ;;
         *)
