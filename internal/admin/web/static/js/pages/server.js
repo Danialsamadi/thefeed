@@ -34,7 +34,7 @@
   };
 
   const n0 = v => (v == null ? '–' : Math.round(v));
-  const n1 = v => (v == null ? '–' : v.toFixed(1));
+  const r = v => (v == null ? '–' : rate(v).join(' '));
   const size = b => { const u = b >= 2 ** 30 ? 'GB' : 'MB'; return `${inUnit(b, u)} ${u}`; };
   // A point without a sample has no bar.
   const bars = (points, top) => points.map(v => { const h = barPct(v, top); return h == null ? '<i style="visibility:hidden"></i>' : `<i style="height:${h}%"></i>`; }).join('');
@@ -66,9 +66,9 @@
           <p class="lead">Now <b>${n0(cpu.now)}%</b>. Average <b>${n0(cpu.avg)}%</b>, peak <b>${n0(cpu.peak)}%</b>.</p>
           <div class="chart" aria-hidden="true"><span class="yl" style="top:0">100%</span><span class="yl" style="top:36px">50%</span><span class="grid" style="top:36px"></span>
             <div class="bars">${bars(cpu.points, 100)}</div></div>${axis()}</div>
-        <div class="sec"><h3>Network ${perStep(srv.step)}, Mb/s</h3>
-          <p class="lead">Out now <b>${n1(net.outNow)} Mb/s</b>, peak <b>${n1(net.outPeak)}</b>. In <b>${n1(net.inNow)} Mb/s</b>. Today: <b>${size(net.sentToday)}</b> sent, <b>${size(net.receivedToday)}</b> received.</p>
-          <div class="chart" aria-hidden="true"><span class="yl" style="top:0">${net.scale} out</span><span class="yl" style="top:88px">${net.scale} in</span>
+        <div class="sec"><h3>Network ${perStep(srv.step)}</h3>
+          <p class="lead">Out now <b>${r(net.outNow)}</b>, peak <b>${r(net.outPeak)}</b>. In <b>${r(net.inNow)}</b>. Today: <b>${size(net.sentToday)}</b> sent, <b>${size(net.receivedToday)}</b> received.</p>
+          <div class="chart" aria-hidden="true"><span class="yl" style="top:0">${r(net.scale)} out</span><span class="yl" style="top:88px">${r(net.scale)} in</span>
             <div class="bars out">${bars(net.out, net.scale)}</div><div class="bars in">${bars(net.in, net.scale)}</div></div>${axis()}</div>
         <div class="sec"><h3>RAM: ${inUnit(ram.total - ram.free, 'MB')} of ${inUnit(ram.total, 'MB')} MB</h3>
           ${parts([['thefeed-server', ram.server, '--accent', 'MB'], ['Media cache', ram.mediaCache, '--dim', 'MB'], ['System', ram.system, '--track-edge', 'MB'], ['Free', ram.free, '--surface2', 'MB']], ram.total)}</div>

@@ -24,7 +24,7 @@
 // Every chart has 60 points of step seconds from from; a point is the
 // average of its samples, null without one. CPU is percent; network is Mb/s
 // (10^6 bits) on the default-route interface, and scale is the chart's top
-// (1, 2, 5, 10, … Mb/s). avg and peak are of the points, now is the latest
+// (0.01, 0.02, 0.05, … 1, 2, 5, … Mb/s). avg and peak are of the points, now is the latest
 // sample; all three are null with no sample yet. Sizes are bytes; today's
 // traffic counts from midnight in the panel's time zone. RAM's parts and
 // disk's parts each add up to their total. Reports and logs are the hourly
@@ -454,7 +454,7 @@ type netChart struct {
 	OutNow  *float64   `json:"outNow"`
 	InNow   *float64   `json:"inNow"`
 	OutPeak *float64   `json:"outPeak"`
-	Scale   float64    `json:"scale"` // the chart's top: 1, 2, 5, 10, 20, … Mb/s
+	Scale   float64    `json:"scale"` // the chart's top: 0.01, 0.02, 0.05, … 1, 2, 5, … Mb/s
 	Out     []*float64 `json:"out"`
 	In      []*float64 `json:"in"`
 	// Bytes since midnight in the panel's time zone.
@@ -652,12 +652,13 @@ func deref(f *float64) float64 {
 	return *f
 }
 
-// scale is the first of 1, 2, 5, 10, 20, 50, … at or above peak.
+// scale is the first of 0.01, 0.02, 0.05, 0.1, … 1, 2, 5, 10, … at or above
+// peak: from 10 kb/s, since a feed server mostly sends kilobits.
 func scale(peak float64) float64 {
-	for s := 1.0; ; s *= 10 {
+	for e := -2; ; e++ {
 		for _, m := range []float64{1, 2, 5} {
-			if m*s >= peak {
-				return m * s
+			if s := m * math.Pow10(e); s >= peak {
+				return s
 			}
 		}
 	}

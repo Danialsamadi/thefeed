@@ -55,13 +55,13 @@
   // ---------- the Board ----------
   function pin() {
     if (!pinned) return '';
-    const cpu = pinned.cpu == null ? '–' : Math.round(pinned.cpu), out = pinned.out == null ? '–' : pinned.out.toFixed(1);
+    const cpu = pinned.cpu == null ? '–' : Math.round(pinned.cpu), out = pinned.out == null ? ['–', 'Mb/s'] : rate(pinned.out);
     const ram = inUnit(pinned.ramUsed, 'MB'), disk = inUnit(pinned.diskUsed, 'GB');
-    return `<button class="pin" type="button" data-act="view" data-v="server" data-k="pin" aria-label="Server: CPU ${cpu}%, RAM ${ram} MB, disk ${disk} GB, network out ${out} Mb/s. Open server details.">
+    return `<button class="pin" type="button" data-act="view" data-v="server" data-k="pin" aria-label="Server: CPU ${cpu}%, RAM ${ram} MB, disk ${disk} GB, network out ${out.join(' ')}. Open server details.">
       <span><small>CPU</small><b>${cpu}<i>%</i></b></span>
       <span><small>RAM</small><b>${ram}<i>MB</i></b></span>
       <span><small>Disk</small><b>${disk}<i>GB</i></b></span>
-      <span><small>Out</small><b>${out}<i>Mb/s</i></b></span></button>`;
+      <span><small>Out</small><b>${out[0]}<i>${out[1]}</i></b></span></button>`;
   }
   const row = f => `<button class="row" type="button" data-act="open" data-id="${f.id}" data-k="row-${f.id}"${S.open.board === f.id ? ' aria-current="true"' : ''}>
       <span class="nm">${esc(f.name)}</span>
