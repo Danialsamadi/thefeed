@@ -2,12 +2,14 @@ package settings
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/sartoopjj/thefeed/internal/admin"
 	"github.com/sartoopjj/thefeed/internal/serverconfig"
 )
@@ -95,6 +97,9 @@ func (m *module) handleCheck(w http.ResponseWriter, r *http.Request) {
 // internet sees rather than this machine's own resolver or cache.
 var publicResolvers = []string{"1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"}
 
+// nsPort is the port name servers answer on. Tests move it.
+var nsPort = "53"
+
 // publicDNS is the real DNS.
 type publicDNS struct{}
 
@@ -110,15 +115,49 @@ var resolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, net
 	return nil, err
 }}
 
+// NS is the domain's NS records as its parent zone delegates them: the
+// records the operator set at their DNS host. Resolvers can't tell, since
+// they pass on what the domain's own name server answers, and
+// thefeed-server answers NXDOMAIN for its domain.
 func (publicDNS) NS(ctx context.Context, domain string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	ns, err := resolver.LookupNS(ctx, domain)
-	var out []string
-	for _, n := range ns {
-		out = append(out, strings.TrimSuffix(n.Host, "."))
+	q := dns.Fqdn(domain)
+	// The parent is the closest zone above the domain that has name servers.
+	var parent []*net.NS
+	for name := q; len(parent) == 0; {
+		_, up, _ := strings.Cut(name, ".")
+		if up == "" {
+			return nil, fmt.Errorf("no zone above %s has name servers", domain)
+		}
+		name = up
+		parent, _ = resolver.LookupNS(ctx, name)
 	}
-	return out, err
+	m := new(dns.Msg)
+	m.SetQuestion(q, dns.TypeNS)
+	m.RecursionDesired = false
+	c := &dns.Client{Timeout: 3 * time.Second}
+	err := fmt.Errorf("no name server of the zone above %s answered", domain)
+	for _, p := range parent {
+		addrs, _ := resolver.LookupHost(ctx, p.Host)
+		for _, a := range addrs {
+			r, _, xerr := c.ExchangeContext(ctx, m, net.JoinHostPort(a, nsPort))
+			if xerr != nil {
+				err = xerr
+				continue
+			}
+			// A delegation is a referral; a zone the parent serves itself
+			// answers.
+			var out []string
+			for _, rr := range append(r.Answer, r.Ns...) {
+				if ns, ok := rr.(*dns.NS); ok && strings.EqualFold(ns.Hdr.Name, q) {
+					out = append(out, strings.TrimSuffix(ns.Ns, "."))
+				}
+			}
+			return out, nil
+		}
+	}
+	return nil, err
 }
 
 func (publicDNS) Addrs(ctx context.Context, host string) ([]string, error) {
