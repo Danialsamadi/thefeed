@@ -19,8 +19,9 @@
   let ticks = 0;
 
   // The API's states are ok, slow, down and off; the mockup's classes call slow warn.
-  const cls = s => (s === 'slow' ? 'warn' : s);
-  const STATUS = { ok: 'OK', slow: 'Slow', down: 'Down', pending: 'Not checked' };
+  // A Nitter instance resting after HTTP 429 is amber too.
+  const cls = s => (s === 'slow' || s === 'resting' ? 'warn' : s);
+  const STATUS = { ok: 'OK', slow: 'Slow', down: 'Down', pending: 'Not checked', resting: 'Resting' };
   const LEVEL = { ERROR: 'down', WARN: 'warn' };
   const sentence = s => (/[.!?…]$/.test(s) ? s : s + '.');
   const known = t => t && !String(t).startsWith('0001'); // a zero time is "not yet"

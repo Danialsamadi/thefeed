@@ -141,6 +141,9 @@ type Instance struct {
 	Error     string    `json:"error,omitempty"`
 	LatencyMs int64     `json:"latencyMs"`
 	At        time.Time `json:"at,omitzero"` // zero: not tried yet
+	// RestUntil is when an instance that answered HTTP 429 is asked again;
+	// zero when it isn't resting.
+	RestUntil time.Time `json:"restUntil,omitzero"`
 }
 
 // MediaCacheStats is the media cache's counters.

@@ -363,6 +363,16 @@ func TestXRules(t *testing.T) {
 	steps(t, "x", []step{
 		{nil, "ok", "3 of 3 Nitter instances answer"},
 		{func(st *controlapi.Status) { st.X.Instances[0].OK, st.X.Instances[0].Error = false, "429 rate limited" }, "slow", "2 of 3 Nitter instances answer"},
+		// Resting after HTTP 429, an instance isn't failing; with all of
+		// them resting, nothing is fetched until they're back.
+		{func(st *controlapi.Status) {
+			st.X.Instances[0].OK, st.X.Instances[0].RestUntil = false, t0.Add(time.Hour)
+		}, "ok", "2 of 3 Nitter instances answer, 1 resting"},
+		{func(st *controlapi.Status) {
+			for i := range st.X.Instances {
+				st.X.Instances[i].OK, st.X.Instances[i].RestUntil = false, t0.Add(time.Hour)
+			}
+		}, "slow", "0 of 3 Nitter instances answer, 3 resting"},
 		{func(st *controlapi.Status) {
 			for i := range st.X.Instances {
 				st.X.Instances[i].OK, st.X.Instances[i].Error = false, "timed out"

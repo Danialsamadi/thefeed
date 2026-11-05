@@ -335,7 +335,8 @@ func (g *GitHubRelay) check(ctx context.Context) controlapi.CheckResult {
 	return res
 }
 
-// check probes every instance at once, with the first account.
+// check probes every instance at once, with the first account, except
+// those resting after HTTP 429: asking them again would only extend it.
 func (xr *XPublicReader) check(ctx context.Context) controlapi.CheckResult {
 	if len(xr.accounts) == 0 {
 		return controlapi.CheckResult{Summary: "there are no X accounts to check the instances with."}
@@ -345,19 +346,32 @@ func (xr *XPublicReader) check(ctx context.Context) controlapi.CheckResult {
 	errs := make([]error, len(xr.instances))
 	var wg sync.WaitGroup
 	for i, in := range xr.instances {
+		xr.mu.RLock()
+		until := xr.results[in].RestUntil
+		xr.mu.RUnlock()
+		if time.Now().Before(until) {
+			errs[i] = errRateLimited{until: until}
+			continue
+		}
 		wg.Go(func() { _, _, _, errs[i] = xr.tryInstance(ctx, in, xr.accounts[0]) })
 	}
 	wg.Wait()
-	ok, detail := 0, make([]string, len(errs))
+	ok, resting, detail := 0, 0, make([]string, len(errs))
 	for i, err := range errs {
 		if err == nil {
 			ok++
 			detail[i] = xr.instances[i] + " ok"
-		} else {
-			detail[i] = xr.instances[i] + " " + err.Error()
+			continue
 		}
+		if errors.As(err, &errRateLimited{}) {
+			resting++
+		}
+		detail[i] = xr.instances[i] + " " + err.Error()
 	}
-	res := controlapi.CheckResult{OK: ok == len(errs), Summary: answered(ok, len(errs), "instance", "instances"), Detail: strings.Join(detail, "; ")}
+	res := controlapi.CheckResult{OK: ok > 0 && ok+resting == len(errs), Summary: answered(ok, len(errs), "instance", "instances"), Detail: strings.Join(detail, "; ")}
+	if resting > 0 {
+		res.Summary += fmt.Sprintf(" %d resting after HTTP 429.", resting)
+	}
 	log.Printf("[x] check: %s %s", res.Summary, res.Detail)
 	return res
 }

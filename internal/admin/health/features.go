@@ -108,17 +108,22 @@ func evalX(e *env) view {
 	if x == nil || x.Accounts == 0 {
 		return view{State: "off", Line: "No X accounts", Impact: "Add X accounts in Control to read X."}
 	}
-	ok, tried := 0, 0
+	// An instance resting after HTTP 429 isn't failing: it asked to be left
+	// alone for a while, and the others take its turns.
+	ok, tried, resting := 0, 0, 0
 	d := &deps{Title: "Nitter instances", Cols: []string{"Instance", "Status", "Result"}}
 	for _, in := range x.Instances {
 		row := []string{in.Host, "ok", fmt.Sprintf("answered in %s", took(time.Duration(in.LatencyMs)*time.Millisecond))}
 		switch {
 		case in.At.IsZero():
 			row[1], row[2] = "pending", "not checked yet"
+		case in.RestUntil.After(e.now):
+			row[1], row[2] = "resting", "rate limited (HTTP 429), asked again at "+e.when(in.RestUntil)
+			resting++
 		case !in.OK:
 			row[1], row[2] = "down", in.Error
 		}
-		if !in.At.IsZero() {
+		if !in.At.IsZero() && !in.RestUntil.After(e.now) {
 			tried++
 		}
 		if in.OK {
@@ -127,12 +132,15 @@ func evalX(e *env) view {
 		d.Rows = append(d.Rows, row)
 	}
 	v := view{State: "ok", Line: fmt.Sprintf("%d of %d Nitter instances answer", ok, len(x.Instances)), Deps: d}
+	if resting > 0 {
+		v.Line += fmt.Sprintf(", %d resting", resting)
+	}
 	switch {
-	case tried == 0:
+	case tried == 0 && resting == 0:
 		v.Line = "Nitter instances not checked yet"
-	case ok == 0:
+	case ok == 0 && tried > 0:
 		v.State = "down"
-	case ok < tried:
+	case ok < tried, ok == 0:
 		v.State = "slow"
 	}
 	accounts := strconv.Itoa(x.Accounts)
