@@ -44,7 +44,8 @@ html, body { height: 100%; background: #17212b; }
 
 /* nav: floating bottom bar on a phone (same shape as the app's nav.css) */
 .nav { position: absolute; left: 10px; right: 10px; bottom: 14px; height: 60px; z-index: 5; display: flex;
-  background: color-mix(in srgb, var(--bg2) 92%, transparent); border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+  background: color-mix(in srgb, var(--bg2) 94%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); /* text scrolling under it stays unreadable */
+  border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
 .nav button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--dim); font-size: 11px; font-weight: 500; position: relative; border-radius: 18px; transition: color 150ms var(--ease); }
 .nav button:hover { color: var(--text); }
 .nav button:active svg { transform: scale(.9); }
@@ -162,6 +163,18 @@ html, body { height: 100%; background: #17212b; }
 .lt { color: var(--dim); }
 .lv { font-weight: 600; color: var(--dim); } .lv.down { color: var(--down); } .lv.warn { color: var(--warn); }
 .lm { overflow-wrap: anywhere; }
+/* the Logs page: the filters and export, kept in view under the bar, then the lines */
+.lgtools { padding: 0 16px 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+@media (min-width: 640px) { .lgtools { position: sticky; top: 68px; z-index: 2; background: var(--bg); } } /* on a phone they'd take a quarter of the screen */
+.lgbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.lgbar select.inp { flex: 0 1 auto; }
+.lgbar .lgq { flex: 1 1 22ch; }
+.lgbar .seg button { white-space: nowrap; }
+.lgexp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--dim); font-size: 13px; }
+.dsec .lgexp, .sec .lgexp { margin: 0 0 10px; }
+.lgmore { color: var(--dim); font-size: 13px; margin: 0 16px 12px; }
+a.btn { display: inline-flex; align-items: center; text-decoration: none; }
+.lgpad { margin: 0 16px 12px; }
 .empty { color: var(--dim); font-size: 14px; padding: 2px 0 6px; }
 @container pane (min-width: 520px) {
   .det { padding: 16px 20px 32px; }

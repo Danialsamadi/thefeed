@@ -10,7 +10,10 @@
 //	GET /api/logs/server       every line
 //	GET /api/logs/{feature}    one feature's lines: x, tg, feed, chan, chat, dnsm, gh
 //
-// Both take ?filter=all|bad (bad: warnings and errors only), ?limit=N
+//	GET /api/logs/{feature}/export   the same lines as a .log file to save
+//
+// All take ?filter=all|bad (bad: warnings and errors only) and ?q= (lines
+// with those words, in any case). The first two also take ?limit=N
 // (default 100, at most 500) and ?cursor= from the page before, and answer
 //
 //	{"days":[{"day":"2026-11-04","lines":[{"at","level","feature","text"}]}],"next":"..."}
@@ -18,6 +21,11 @@
 // level is INFO, WARN or ERROR; feature is "" for lines that belong to no
 // feature page. Days are in the panel's time zone. next is "" when the
 // journal has nothing older.
+//
+// An export takes ?hours=1|24|168 and answers text/plain as an attachment:
+// a "# " line saying what it holds, then each line oldest first as
+// "2026-11-04 12:01:30 UTC ERROR text": at most the newest 50,000 lines,
+// and a second "# " line when that left some out.
 //
 // With THEFEED_ADMIN_SERVER=docker the lines come from the server
 // container's log instead, through the Docker Engine API, and next is
@@ -84,18 +92,8 @@ func Module(d *admin.Deps) error {
 func New(j Journal) admin.Module {
 	return func(d *admin.Deps) error {
 		d.Handle("GET /api/logs/{feature}", func(w http.ResponseWriter, r *http.Request) {
-			feature := r.PathValue("feature")
-			if !slices.Contains(slices.Collect(maps.Values(features)), feature) && feature != "server" {
-				admin.WriteError(w, http.StatusNotFound, admin.FieldError{Field: "feature", Message: "There's no feature called " + strconv.Quote(feature) + "."})
-				return
-			}
-			bad := false
-			switch r.URL.Query().Get("filter") {
-			case "", "all":
-			case "bad":
-				bad = true
-			default:
-				admin.WriteError(w, http.StatusBadRequest, admin.FieldError{Field: "filter", Message: `The filter is "all" or "bad" (warnings and errors).`})
+			s, ok := asked(w, r)
+			if !ok {
 				return
 			}
 			limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -103,9 +101,7 @@ func New(j Journal) admin.Module {
 				limit = 100
 			}
 			limit = min(limit, 500)
-			lines, next, err := readPage(r.Context(), j, d.Clock.Now().Location(), r.URL.Query().Get("cursor"), limit, func(l line) bool {
-				return (feature == "server" || l.Feature == feature) && !(bad && l.Level == "INFO")
-			})
+			lines, next, err := readPage(r.Context(), j, d.Clock.Now().Location(), r.URL.Query().Get("cursor"), limit, s.keep)
 			if err != nil {
 				admin.WriteError(w, http.StatusServiceUnavailable, admin.FieldError{Message: "Couldn't read thefeed-server's journal: " + err.Error()})
 				return
@@ -114,8 +110,129 @@ func New(j Journal) admin.Module {
 			p.Next = next
 			admin.WriteJSON(w, http.StatusOK, p)
 		})
+		d.Handle("GET /api/logs/{feature}/export", func(w http.ResponseWriter, r *http.Request) {
+			s, ok := asked(w, r)
+			if !ok {
+				return
+			}
+			hours, err := strconv.Atoi(r.URL.Query().Get("hours"))
+			if err != nil || !slices.Contains([]int{1, 24, 168}, hours) {
+				admin.WriteError(w, http.StatusBadRequest, admin.FieldError{Field: "hours", Message: "Export the last 1, 24 or 168 hours."})
+				return
+			}
+			now := d.Clock.Now()
+			since := now.Add(-time.Duration(hours) * time.Hour)
+			lines, cut, err := readSince(r.Context(), j, now.Location(), since, s.keep)
+			if err != nil {
+				admin.WriteError(w, http.StatusServiceUnavailable, admin.FieldError{Message: "Couldn't read thefeed-server's journal: " + err.Error()})
+				return
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "# thefeed-server log%s, %s to %s, oldest first: %d %s\n", s.about(), since.Format(minuteLayout), now.Format(minuteLayout), len(lines), map[bool]string{true: "line", false: "lines"}[len(lines) == 1])
+			if cut {
+				b.WriteString("# Cut short: the oldest lines in the range were left out.\n")
+			}
+			for _, l := range lines {
+				fmt.Fprintf(&b, "%s %-5s %s\n", l.At.Format("2006-01-02 15:04:05 MST"), l.Level, l.Text)
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="thefeed-%s-%s.log"`, s.feature, now.Format("2006-01-02-1504")))
+			io.WriteString(w, b.String())
+		})
 		return nil
 	}
+}
+
+const minuteLayout = "2006-01-02 15:04 MST"
+
+// selection is which lines a request asks for.
+type selection struct {
+	feature string // or "server" for every line
+	bad     bool   // warnings and errors only
+	q       string // lower case; "" for any
+}
+
+// asked reads the feature, ?filter= and ?q= of r, or answers it when
+// they're wrong.
+func asked(w http.ResponseWriter, r *http.Request) (selection, bool) {
+	s := selection{feature: r.PathValue("feature"), q: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))}
+	if !slices.Contains(slices.Collect(maps.Values(features)), s.feature) && s.feature != "server" {
+		admin.WriteError(w, http.StatusNotFound, admin.FieldError{Field: "feature", Message: "There's no feature called " + strconv.Quote(s.feature) + "."})
+		return s, false
+	}
+	switch r.URL.Query().Get("filter") {
+	case "", "all":
+	case "bad":
+		s.bad = true
+	default:
+		admin.WriteError(w, http.StatusBadRequest, admin.FieldError{Field: "filter", Message: `The filter is "all" or "bad" (warnings and errors).`})
+		return s, false
+	}
+	return s, true
+}
+
+func (s selection) keep(l line) bool {
+	return (s.feature == "server" || l.Feature == s.feature) && !(s.bad && l.Level == "INFO") &&
+		(s.q == "" || strings.Contains(strings.ToLower(l.Text), s.q))
+}
+
+// about says what an export holds, after "thefeed-server log".
+func (s selection) about() string {
+	out := ""
+	if s.feature != "server" {
+		out += ", feature " + s.feature
+	}
+	if s.bad {
+		out += ", warnings and errors"
+	}
+	if s.q != "" {
+		out += ", matching " + strconv.Quote(s.q)
+	}
+	return out
+}
+
+// maxExport caps an export's lines, and maxExportReads its journal reads.
+const (
+	maxExport      = 50_000
+	maxExportReads = 100
+)
+
+// readSince reads the journal back from the newest entry to since, for up to
+// maxExport lines that keep accepts, and gives them oldest first. cut is
+// true when the cap left older lines in the range out.
+func readSince(ctx context.Context, j Journal, loc *time.Location, since time.Time, keep func(line) bool) (out []line, cut bool, err error) {
+	const chunk = 2000
+	cursor := ""
+	defer func() { slices.Reverse(out) }()
+	for range maxExportReads {
+		raw, err := j.Read(ctx, cursor, chunk)
+		if err != nil {
+			return nil, false, err
+		}
+		lines, err := parse(raw, loc)
+		if err != nil {
+			return nil, false, err
+		}
+		got := len(lines)
+		if cursor != "" && got > 0 && lines[0].cursor == cursor {
+			lines = lines[1:]
+		}
+		for _, l := range lines {
+			cursor = l.cursor
+			if l.At.Before(since) {
+				return out, false, nil
+			}
+			if keep(l) {
+				if out = append(out, l); len(out) == maxExport {
+					return out, true, nil
+				}
+			}
+		}
+		if got < chunk {
+			return out, false, nil
+		}
+	}
+	return out, true, nil
 }
 
 // maxReads caps the journal reads behind one page.

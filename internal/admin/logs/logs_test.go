@@ -379,3 +379,59 @@ func TestLevelsOfRealLines(t *testing.T) {
 		}
 	}
 }
+
+// q keeps the lines with those words, in any case, and goes with the
+// warnings filter.
+func TestSearchFindsTheWordsInAnyCase(t *testing.T) {
+	p := newPanel(t, loadJournal(t))
+	poast := []string{
+		"[x] fetch @jack: all instances failed: nitter.poast.org: dial tcp: lookup nitter.poast.org: no such host",
+		`[x] @jack: instance nitter.poast.org: network error: Get "https://nitter.poast.org/jack/rss": dial tcp: lookup nitter.poast.org: no such host`,
+	}
+	if got := texts(p.page("/api/logs/x?q=NO+SUCH+HOST").lines()); !slices.Equal(got, poast) {
+		t.Errorf("x, q=NO SUCH HOST =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(poast, "\n"))
+	}
+	// The cycle's start names nitter.poast.org too, but it isn't a warning.
+	if got := texts(p.page("/api/logs/server?q=nitter.poast.org&filter=bad").lines()); !slices.Equal(got, poast) {
+		t.Errorf("server, warnings matching nitter.poast.org =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(poast, "\n"))
+	}
+}
+
+// An export is the range's lines, oldest first, as a text file to save,
+// with what it holds written at the top.
+func TestExportIsTheRangeOldestFirst(t *testing.T) {
+	p := newPanel(t, loadJournal(t))
+	w := p.get("/api/logs/x/export?hours=24")
+	if w.Code != 200 || w.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
+		w.Header().Get("Content-Disposition") != `attachment; filename="thefeed-x-2026-11-04-1205.log"` {
+		t.Fatalf("export = %d %v", w.Code, w.Header())
+	}
+	want := []string{
+		"# thefeed-server log, feature x, 2026-11-03 12:05 UTC to 2026-11-04 12:05 UTC, oldest first: 7 lines",
+		"2026-11-03 23:58:10 UTC INFO  [x] reader goroutine started",
+		"2026-11-03 23:58:12 UTC INFO  [x] fetch cycle started for 6 accounts (instances: [nitter.net xcancel.com nitter.poast.org])",
+		"2026-11-03 23:58:14 UTC WARN  [x] @jack: instance nitter.net: HTTP 429 Too Many Requests",
+		`2026-11-03 23:58:24 UTC WARN  [x] @jack: instance xcancel.com: network error: Get "https://xcancel.com/jack/rss": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`,
+		`2026-11-03 23:58:24 UTC WARN  [x] @jack: instance nitter.poast.org: network error: Get "https://nitter.poast.org/jack/rss": dial tcp: lookup nitter.poast.org: no such host`,
+		"2026-11-03 23:58:24 UTC ERROR [x] fetch @jack: all instances failed: nitter.poast.org: dial tcp: lookup nitter.poast.org: no such host",
+		"2026-11-04 03:00:03 UTC WARN  [x profile-pic] @jack: unexpected EOF",
+	}
+	if got := strings.Split(strings.TrimSpace(w.Body.String()), "\n"); !slices.Equal(got, want) {
+		t.Errorf("export =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	w = p.get("/api/logs/server/export?hours=1&filter=bad&q=exited")
+	want = []string{
+		`# thefeed-server log, warnings and errors, matching "exited", 2026-11-04 11:05 UTC to 2026-11-04 12:05 UTC, oldest first: 1 line`,
+		"2026-11-04 12:01:30 UTC ERROR thefeed-server.service: Main process exited, code=exited, status=1/FAILURE",
+	}
+	if got := strings.Split(strings.TrimSpace(w.Body.String()), "\n"); !slices.Equal(got, want) {
+		t.Errorf("export of the last hour's warnings =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	for path, code := range map[string]int{"/api/logs/x/export?hours=5": 400, "/api/logs/nope/export?hours=24": 404} {
+		if w := p.get(path); w.Code != code {
+			t.Errorf("GET %s = %d, want %d", path, w.Code, code)
+		}
+	}
+}

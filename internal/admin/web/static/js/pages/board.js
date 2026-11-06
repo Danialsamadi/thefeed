@@ -134,7 +134,7 @@
         <div class="seg" role="group" aria-label="Log lines">
           <button type="button" data-act="f-filter" data-f="all" data-k="f-all" aria-pressed="${f === 'all'}">All lines</button>
           <button type="button" data-act="f-filter" data-f="bad" data-k="f-bad" aria-pressed="${f === 'bad'}">Warnings and errors</button></div>
-        ${body}</section>`;
+        ${logExport(p.id, f)}${body}</section>`;
   }
   function page(id) {
     const f = board?.features.find(f => f.id === id), p = pages[id];
