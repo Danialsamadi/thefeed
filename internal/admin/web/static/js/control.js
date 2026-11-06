@@ -14,8 +14,8 @@
 //   Panel.check(id)    run a feature's check now, a promise of the line to show.
 //                      'chan' is Fetch all now on Telegram channels.
 //   Both are pages/board.js's.
-// Restart… in the notice opens Service and power (pages/service.js) in its
-// restart confirm, through its own Panel.acts.svc.
+// Restart… in the notice opens Service and power's restart popup
+// (pages/service.js), through its own Panel.acts.svc.
 'use strict';
 
 const Ctl = (() => {
@@ -261,7 +261,7 @@ const Ctl = (() => {
     const w = where === 'control' ? 'in-list' : 'in-det';
     return `<div class="notice ${w}" role="status"><span>${plural(C.st.waiting, 'change waits', 'changes wait')} for a restart.</span>
       <button class="btn quiet" type="button" data-act="c-discard" data-k="discard-${w}"${C.busy ? ' disabled' : ''}>Discard</button>${Panel.acts.svc
-        ? `<button class="btn" type="button" data-act="c-restart" data-k="restart-${w}">Restart…</button>` : ''}</div>`;
+        ? `<button class="btn" type="button" data-act="svc" data-a="restart" data-k="restart-${w}">Restart…</button>` : ''}</div>`;
   });
   Panel.acts['c-discard'] = async () => {
     const n = C.st.waiting;
@@ -275,11 +275,6 @@ const Ctl = (() => {
     } else if (r) Panel.say(error(r));
     render();
     (root.querySelector('.v-control [data-k="pmsg"]:not(:empty)') || root.querySelector('.v-control .cl'))?.focus();
-  };
-  // Service and power's own Restart… button, pressed: it opens its confirm.
-  Panel.acts['c-restart'] = () => {
-    Panel.acts.open({ dataset: { id: 'svc' } });
-    Panel.acts.svc({ dataset: { a: 'restart' } });
   };
 
   // section registers a Control section drawn from the settings. p is
@@ -305,5 +300,5 @@ const Ctl = (() => {
     });
   }
 
-  return { C, call, render, focus, error, setting, val, values, after, off, fid, save, sw, num, txt, opts, rows, addForm, section };
+  return { C, load, call, render, focus, error, setting, val, values, after, off, fid, save, sw, num, txt, opts, rows, addForm, section };
 })();
