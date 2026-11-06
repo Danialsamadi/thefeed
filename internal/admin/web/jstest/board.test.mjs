@@ -39,6 +39,22 @@ check('one day', upLegend({ days: ['up'], up: 1, slow: 0, down: 0, off: 0 }), '1
 check('the first count says days', upLegend({ days: ['down', 'slow'], up: 0, slow: 1, down: 1, off: 0 }), '1 day slow, 1 down');
 check('every day off', upLegend({ days: days(60, 'off'), up: 0, slow: 0, down: 0, off: 60 }), '60 days off');
 
+// The Board badge: what needs attention and hasn't been seen on the Board yet.
+{
+  const xSlow = [{ id: 'x', state: 'slow' }, { id: 'feed', state: 'ok' }];
+  const unseen = (features, seen) => attentionKeys(features).filter(k => !seen.includes(k));
+  check('a slow feature not seen yet counts', unseen(xSlow, []), ['x:slow']);
+  let seen = seenNow(xSlow, [], true);
+  check('once looked at, it stops counting', unseen(xSlow, seen), []);
+  check('away, it stays seen while it lasts', unseen(xSlow, seenNow(xSlow, seen, false)), []);
+  const xDown = [{ id: 'x', state: 'down' }];
+  check('getting worse counts again', unseen(xDown, seenNow(xDown, seen, false)), ['x:down']);
+  seen = seenNow([{ id: 'x', state: 'ok' }], seen, false);
+  check('recovering, away, forgets it', seen, []);
+  check('so failing again counts', unseen(xSlow, seen), ['x:slow']);
+  check('off and ok never count', attentionKeys([{ id: 'gh', state: 'off' }, { id: 'feed', state: 'ok' }]), []);
+}
+
 // ===== axis labels: under the 60-day bars, and under the Server charts (first point, middle point, now) =====
 const now = new Date(2026, 10, 3, 12, 4, 31);
 check('60 days to today', uptimeAxis(now), ['5 Sep', '4 Oct', 'today']);
