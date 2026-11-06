@@ -69,11 +69,17 @@ const Panel = (() => {
   const visible = sel => [...root.querySelectorAll(sel)].find(el => el.getClientRects().length);
 
   // ---------- API ----------
+  // Every request says how long ago the operator last clicked, typed or
+  // scrolled, so the server doesn't count the page's own polls as use and
+  // an untouched tab signs out (internal/admin/auth.go).
+  let lastInput = Date.now();
+  ['pointerdown', 'keydown', 'wheel'].forEach(t => addEventListener(t, () => { lastInput = Date.now(); }, { capture: true, passive: true }));
   async function api(method, path, body) {
+    const headers = { 'X-Idle-Seconds': String(Math.floor((Date.now() - lastInput) / 1000)) };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
     let r;
     try {
-      r = await fetch(path, body === undefined ? { method, cache: 'no-store' }
-        : { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      r = await fetch(path, { method, cache: 'no-store', headers, body: body === undefined ? undefined : JSON.stringify(body) });
     } catch {
       if (S.conn !== 'down') {
         Object.assign(S, { conn: 'down', downAt: when(new Date()), retryMsg: '' });

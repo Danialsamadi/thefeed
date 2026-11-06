@@ -337,6 +337,20 @@ details.it .body code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, mono
 .it.confirm.danger { background: color-mix(in srgb, var(--down-fill) 12%, var(--surface)); }
 .it.confirm .tx label { display: block; margin-top: 8px; }
 .it.confirm .inp { width: 100%; max-width: 320px; margin-top: 4px; }
+/* the restart popup (pages/service.js); a closed dialog stays display: none */
+.dlg { margin: auto; width: min(440px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 16px 48px rgb(0 0 0 / .45); }
+.dlg::backdrop { background: rgb(0 0 0 / .55); }
+.app .dlg:focus-visible { outline: none; }
+.dlg .st-line b { font-size: 19px; }
+.dlg.s-ask .sdot { background: var(--warn); }
+.dlg.s-busy .sdot { background: var(--accent); }
+.dlg .impact { margin-top: 8px; }
+.dlg .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.dlg .acts:empty { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .dlg.s-busy .sdot { animation: pulse 800ms var(--ease) infinite alternate; }
+  @keyframes pulse { to { opacity: .25; } }
+}
 .cdet > .det-status { margin: 12px 12px 0; }
 .banner.warnb { background: color-mix(in srgb, var(--warn-fill) 14%, var(--bg)); }
 
