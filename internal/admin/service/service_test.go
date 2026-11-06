@@ -197,6 +197,20 @@ func newPanel(t *testing.T, m *machine, edits ...func(*service.Options)) *panel 
 	return p
 }
 
+// signIn logs in again, for a test whose clock jumps past the panel's
+// 30-minute idle limit, which ends the session.
+func (p *panel) signIn() {
+	p.t.Helper()
+	w := p.do("POST", "/api/auth/login", map[string]string{"username": "admin", "password": "correct horse battery"})
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "thefeed_admin" && c.Value != "" {
+			p.cookie = c
+			return
+		}
+	}
+	p.t.Fatalf("login = %d %s", w.Code, w.Body)
+}
+
 func (p *panel) do(method, path string, body any) *httptest.ResponseRecorder {
 	var r io.Reader
 	if body != nil {
@@ -398,7 +412,8 @@ func TestStateOffersTheNewerRelease(t *testing.T) {
 		t.Fatalf("state = %+v, want v0.41.0 installed, v0.41.1 from fork/thefeed available", s)
 	}
 	m.now = m.now.Add(59 * time.Minute)
-	p.do("GET", "/api/service", nil)
+	p.signIn()
+	p.state(p.do("GET", "/api/service", nil))
 	if m.lookups != 1 {
 		t.Fatalf("GitHub asked %d times within the hour, want once", m.lookups)
 	}
@@ -635,6 +650,7 @@ func TestStoppedServerSaysSinceWhen(t *testing.T) {
 	stoppedAt := m.now
 	p.act("stop", nil)
 	m.now = m.now.Add(time.Hour)
+	p.signIn()
 	if s := p.state(p.do("GET", "/api/service", nil)); s.State != "stopped" || !s.Since.Equal(stoppedAt) {
 		t.Fatalf("an hour after stopping: %+v, want stopped since %s", s, stoppedAt)
 	}
