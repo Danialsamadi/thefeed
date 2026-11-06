@@ -337,8 +337,8 @@ setup_config`)
 // what to do and fails, and the panel stays a systemd service.
 func TestInstallDockerFromOSPackages(t *testing.T) {
 	for release, want := range map[string]string{
-		"ubuntu": "apt-get install -y -q docker.io",
-		"debian": "apt-get install -y -q docker.io",
+		"ubuntu": "apt-get -o DPkg::Lock::Timeout=600 install -y -q docker.io",
+		"debian": "apt-get -o DPkg::Lock::Timeout=600 install -y -q docker.io",
 		"fedora": "dnf install -y -q moby-engine",
 		"amzn":   "dnf install -y -q docker",
 		"arch":   "",
