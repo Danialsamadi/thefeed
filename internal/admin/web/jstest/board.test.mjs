@@ -97,5 +97,14 @@ check('under 1 Mb/s in kb/s', [rate(0.0367), rate(0.2), rate(0)], [['37', 'kb/s'
 check('from 1 Mb/s in Mb/s', [rate(1), rate(2.345)], [['1.0', 'Mb/s'], ['2.3', 'Mb/s']]);
 check('what rounds to 1000 kb/s is 1.0 Mb/s', rate(0.9996), ['1.0', 'Mb/s']);
 
+// logExport: links that save the last hour, day or week of a log, filtered as shown.
+{
+  const hrefs = html => [...html.matchAll(/href="([^"]+)"/g)].map(m => m[1]);
+  check('every line, the three ranges', hrefs(logExport('server')),
+    ['/api/logs/server/export?filter=all&hours=1', '/api/logs/server/export?filter=all&hours=24', '/api/logs/server/export?filter=all&hours=168']);
+  check('a feature, warnings, a search with & in it', hrefs(logExport('x', 'bad', 'a&b "c"'))[1], '/api/logs/x/export?filter=bad&q=a%26b%20%22c%22&hours=24');
+  check('each link downloads', (logExport('x').match(/ download /g) || []).length, 3);
+}
+
 if (failed) { console.error(`${failed} failed, ${passed} passed`); process.exit(1); }
 console.log(`${passed} passed`);

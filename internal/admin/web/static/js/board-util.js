@@ -115,5 +115,14 @@ function nextInstanceOp(items, want) {
   return i < 0 ? null : { op: 'move', index: items.indexOf(want[i]), to: i };
 }
 
+// logExport is the links that save a log as a .log file: the last hour,
+// day or week of feature id's lines ("server" for every line), filtered as
+// the page shows them (GET /api/logs/{id}/export).
+function logExport(id, filter = 'all', q = '') {
+  const query = `filter=${filter}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+  return `<div class="lgexp"><span>Export the last</span>${[[1, '1 hour'], [24, '24 hours'], [168, '7 days']].map(([h, label]) =>
+    `<a class="btn quiet" href="/api/logs/${id}/export?${query}&hours=${h}" download data-k="exp-${id}-${h}" aria-label="Export the last ${label} of this log as a .log file">${label}</a>`).join('')}</div>`;
+}
+
 // hms is a log line's time of day.
 const hms = at => { const d = new Date(at); return `${hm(d)}:${two(d.getSeconds())}`; };

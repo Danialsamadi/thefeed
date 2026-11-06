@@ -89,7 +89,7 @@
   function log() {
     const body = logErr ? `<p class="empty">${esc(logErr)}</p>` : !lines ? '<p class="empty">Loading the log…</p>' : !lines.length ? '<p class="empty">Nothing in the server log yet.</p>'
       : `<div class="loglines">${lines.map(l => `<p${{ ERROR: ' class="lv-err"', WARN: ' class="lv-warn"' }[l.level] || ''}>${hms(l.at)} ${esc(l.text)}</p>`).join('')}</div>`;
-    return `<div class="sec"><h3>Recent server log</h3><p class="lead">Each feature's own log opens from its row on the Board.</p>${body}</div>`;
+    return `<div class="sec"><h3>Recent server log</h3><p class="lead">Every service's log is under Logs, and each feature's opens from its row on the Board.</p>${logExport('server')}${body}</div>`;
   }
 
   Panel.view('server', {
