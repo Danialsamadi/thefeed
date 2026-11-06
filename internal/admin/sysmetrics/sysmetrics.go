@@ -162,7 +162,7 @@ func New(m Machine) admin.Module {
 		if err != nil {
 			return err
 		}
-		s := &module{m: m, ctx: d.Ctx, clock: d.Clock, dataDir: dataDir, minutes: minutes}
+		s := &module{m: m, ctx: d.Ctx, clock: d.Clock, dataDir: dataDir, minutes: minutes, publish: d.Publish}
 		m.Every(10*time.Second, s.sample)
 		m.Every(15*time.Minute, s.probe)
 		d.Handle("GET /api/server", s.available(s.page))
@@ -177,6 +177,7 @@ type module struct {
 	clock   admin.Clock
 	dataDir string
 	minutes *admin.Bucket
+	publish func(key string, r admin.Reading) // for alerts: cpu, ram, disk and net.out
 
 	lastMinute string // the minute store last wrote; only the sampler touches it
 
@@ -238,8 +239,17 @@ type counters struct {
 	rx, tx      uint64
 }
 
-// sample reads the counters and keeps the step since the last reading.
+// sample reads the counters and keeps the step since the last reading. It
+// publishes CPU, RAM, disk and outbound traffic for alerts.
 func (s *module) sample() {
+	now := s.clock.Now()
+	if mem := s.meminfo(); mem["MemTotal"] > 0 {
+		used := mem["MemTotal"] - min(mem["MemAvailable"], mem["MemTotal"])
+		s.publish("ram", admin.Reading{Value: 100 * float64(used) / float64(mem["MemTotal"]), Name: "RAM", At: now})
+	}
+	if total, free, err := s.m.Statfs(s.dataDir); err == nil && total > 0 {
+		s.publish("disk", admin.Reading{Value: 100 * float64(total-min(free, total)) / float64(total), Name: "Disk", At: now})
+	}
 	c, _ := s.counters()
 	s.mu.Lock()
 	last := s.last
@@ -255,6 +265,8 @@ func (s *module) sample() {
 	smp := sample{At: c.at, CPU: 100 * math.Max(0, math.Min(1, busy)), RX: c.rx - last.rx, TX: c.tx - last.tx}
 	smp.In = float64(smp.RX) * 8 / secs / 1e6
 	smp.Out = float64(smp.TX) * 8 / secs / 1e6
+	s.publish("cpu", admin.Reading{Value: smp.CPU, Name: "CPU", At: now})
+	s.publish("net.out", admin.Reading{Value: smp.Out, Name: "Outbound traffic", At: now})
 	s.samples = append(s.samples, smp)
 	for len(s.samples) > 0 && c.at.Sub(s.samples[0].At) > time.Hour {
 		s.samples = s.samples[1:]

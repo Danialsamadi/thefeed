@@ -85,7 +85,7 @@ func New(c controlapi.Client, dns SelfTest) admin.Module {
 		if err != nil {
 			return err
 		}
-		h := &health{c: c, dns: dns, clock: d.Clock, db: db, checked: map[string]*checkResult{}}
+		h := &health{c: c, dns: dns, clock: d.Clock, db: db, checked: map[string]*checkResult{}, publish: d.Publish}
 		d.Handle("GET /api/board", h.handleBoard)
 		d.Handle("GET /api/features/{feature}", h.handleFeature)
 		d.Handle("POST /api/checks/{feature}", h.handleCheck)
@@ -110,10 +110,11 @@ func New(c controlapi.Client, dns SelfTest) admin.Module {
 }
 
 type health struct {
-	c     controlapi.Client
-	dns   SelfTest
-	clock admin.Clock
-	db    *admin.Bucket
+	c       controlapi.Client
+	dns     SelfTest
+	clock   admin.Clock
+	db      *admin.Bucket
+	publish func(key string, r admin.Reading) // for alerts: "server", and "feature.<id>" for each
 
 	mu       sync.Mutex // one sample at a time; guards everything below
 	at       time.Time  // the last sample
@@ -202,6 +203,10 @@ func (h *health) sample(ctx context.Context) {
 		}
 	}
 	h.at, h.server, h.views, h.since = now, server, views, since
+	h.publish("server", admin.Reading{State: server, Name: "thefeed-server", At: now})
+	for _, f := range features {
+		h.publish("feature."+f.id, admin.Reading{State: views[f.id].State, Name: f.name, At: now})
+	}
 }
 
 // fetched is Fetch now, asked at asked, as status c says at now: the first

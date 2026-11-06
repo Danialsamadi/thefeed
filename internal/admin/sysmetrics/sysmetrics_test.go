@@ -48,6 +48,7 @@ type rig struct {
 	user, idle  uint64 // CPU ticks so far, for step
 	rx, tx      uint64 // eth0's bytes so far, for step
 	adminDir    string
+	deps        *admin.Deps // to read what the module published
 	app         *admin.App
 	cookie      *http.Cookie
 }
@@ -129,7 +130,7 @@ func (r *rig) start() {
 		m.LogPath = func(context.Context) (string, error) { return r.logPath, nil }
 	}
 	cfg := admin.Config{AdminDir: r.adminDir, ServerDataDir: dataDir, Clock: admin.ClockFunc(func() time.Time { return r.now })}
-	app, err := admin.New(cfg, sysmetrics.New(m))
+	app, err := admin.New(cfg, sysmetrics.New(m), func(d *admin.Deps) error { r.deps = d; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,6 +254,13 @@ func TestPinnedValuesFromTwoSamples(t *testing.T) {
 	// CPU: 200 busy of 500 ticks = 40%. Out: 3,000,000 bytes × 8 / 10 s = 2.4 Mb/s.
 	if got.CPU == nil || *got.CPU != 40 || got.Out == nil || *got.Out != 2.4 {
 		t.Errorf("after two samples = cpu %v, out %v; want 40, 2.4", ptr(got.CPU), ptr(got.Out))
+	}
+	// The same, published for alerts, with RAM and disk as percent used.
+	rs := r.deps.Readings()
+	for key, want := range map[string]float64{"cpu": 40, "net.out": 2.4, "ram": 100 * 421_888.0 / 1_048_576, "disk": 38} {
+		if got := rs[key]; got.Value != want || !got.At.Equal(r.now) {
+			t.Errorf("reading %s = %v at %v, want %v at %v", key, got.Value, got.At, want, r.now)
+		}
 	}
 }
 

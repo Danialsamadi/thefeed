@@ -50,6 +50,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -107,6 +108,34 @@ func (d *Deps) CheckPassword(w http.ResponseWriter, r *http.Request, password st
 	return d.app.checkPassword(w, r, password)
 }
 
+// Reading is a module's latest word on something an alert can watch: a
+// number, such as CPU percent, or a state, such as a feature's "down".
+// health and sysmetrics publish them; the alerts module reads them.
+type Reading struct {
+	Value float64   // a percent, or Mb/s
+	State string    // the server's (running, not answering, stopped) or a feature's (ok, slow, down, off)
+	Name  string    // what a message calls it, such as "DNS feed"
+	At    time.Time // when it was read
+}
+
+// Publish sets key's latest reading, such as "cpu" or "feature.x". A zero
+// At means now.
+func (d *Deps) Publish(key string, r Reading) {
+	if r.At.IsZero() {
+		r.At = d.Clock.Now()
+	}
+	d.app.readMu.Lock()
+	d.app.readings[key] = r
+	d.app.readMu.Unlock()
+}
+
+// Readings is every key's latest reading.
+func (d *Deps) Readings() map[string]Reading {
+	d.app.readMu.Lock()
+	defer d.app.readMu.Unlock()
+	return maps.Clone(d.app.readings)
+}
+
 // Record appends a to the action record. A zero At means now.
 func (d *Deps) Record(a Action) error { return d.app.record(a) }
 
@@ -128,6 +157,9 @@ type App struct {
 
 	authMu                  sync.Mutex // one sign-in flow at a time: keeps the failure count and the setup code exact
 	auth, sessions, actions *Bucket
+
+	readMu   sync.Mutex
+	readings map[string]Reading // each key's latest, as modules published it
 }
 
 // New opens the panel's database, makes a setup code if no admin exists yet,
@@ -141,7 +173,7 @@ func New(cfg Config, modules ...Module) (*App, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &App{cfg: cfg, clock: cfg.Clock, db: db, mux: http.NewServeMux(), cancel: cancel}
+	a := &App{cfg: cfg, clock: cfg.Clock, db: db, mux: http.NewServeMux(), cancel: cancel, readings: map[string]Reading{}}
 	if err := a.init(); err != nil {
 		a.Close()
 		return nil, err
