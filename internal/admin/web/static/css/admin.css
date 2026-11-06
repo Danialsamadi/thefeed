@@ -20,6 +20,7 @@ html, body { height: 100%; background: #17212b; }
   --sel: #2b5278; --sel-dim: #c9d6e3;
   --ok: #4fae4e; --warn: #f0a830; --down: #ff6b66; --down-fill: #c62828; --warn-fill: #f0a830; --warn-fill-text: #17212b;
   --track-on: #3e9a43; --track-off: #1d2b3a; --track-edge: #6b8299; --offbar: #677686;
+  --series-2: #d95926; /* a chart's second line; with --accent, checked for colour-blind separation */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   container: app / inline-size; height: 100dvh; position: relative; overflow: hidden;
   background: var(--bg); color: var(--text); font: 15px/1.45 "Vazirmatn", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -30,6 +31,7 @@ html, body { height: 100%; background: #17212b; }
   --sel: #d3eafe; --sel-dim: #3d4a57;
   --ok: #276a2b; --warn: #8a4f00; --down: #c62828; --down-fill: #c62828; --warn-fill: #a15c00; --warn-fill-text: #ffffff;
   --track-on: #2e7d32; --track-off: #e8eaed; --track-edge: #8a9096; --offbar: #808487;
+  --series-2: #eb6834;
 }
 /* Native parts (scrollbars, autofill) follow the theme too. */
 .app { color-scheme: dark; } .app[data-theme="light"] { color-scheme: light; }
@@ -216,15 +218,27 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .seg button { flex: 1; min-height: 44px; border-radius: 9px; font-size: 14px; font-weight: 500; color: var(--dim); }
 .seg button:hover { color: var(--text); }
 .seg button[aria-pressed="true"] { background: var(--surface2); color: var(--text); }
-.chart { position: relative; margin-top: 12px; padding-left: 40px; }
-.chart .yl { position: absolute; left: 0; font-size: 11.5px; color: var(--dim); font-variant-numeric: tabular-nums; transform: translateY(-50%); }
-.chart .grid { position: absolute; left: 40px; right: 0; border-top: 1px dashed var(--line); }
-.bars { display: flex; align-items: flex-end; gap: 2px; height: 72px; position: relative; }
-.bars i { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; }
-.bars.in { align-items: flex-start; height: 44px; border-top: 1px solid var(--line); }
-.bars.in i { background: var(--dim); border-radius: 0 0 2px 2px; }
-.bars.out { height: 44px; }
-.xl { display: flex; justify-content: space-between; color: var(--dim); font-size: 12px; margin-top: 4px; padding-left: 40px; }
+/* line charts (pages/server.js): HTML labels beside an SVG stretched over the
+   plot; the crosshair, dots and tooltip are HTML on top */
+.lc { margin-top: 4px; touch-action: pan-y; border-radius: 6px; }
+.app .lc:focus-visible { outline-offset: 4px; }
+.lc .keys { display: flex; gap: 16px; margin-top: 8px; font-size: 12.5px; color: var(--dim); }
+.lc .keys span { display: flex; align-items: center; gap: 6px; }
+.lc .key { display: inline-block; width: 14px; height: 2px; border-radius: 1px; }
+.plot { position: relative; height: 120px; margin: 12px 0 0 60px; }
+.plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.plot .gl { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line); }
+.plot .yl { position: absolute; right: calc(100% + 8px); transform: translateY(-50%); font-size: 11.5px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ln { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.area { stroke: none; fill-opacity: .1; }
+.ln.s1 { stroke: var(--accent); } .ln.s2 { stroke: var(--series-2); } .area.s1 { fill: var(--accent); }
+.key.s1, .plot .dot.s1 { background: var(--accent); } .key.s2, .plot .dot.s2 { background: var(--series-2); }
+.xh { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--track-edge); pointer-events: none; }
+.plot .dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--bg); pointer-events: none; } /* .plot only: the Live button has a .dot too */
+.tip { position: absolute; top: 0; z-index: 1; display: grid; gap: 2px; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface2); box-shadow: 0 6px 16px rgb(0 0 0 / .18); color: var(--dim); font-size: 12.5px; white-space: nowrap; pointer-events: none; }
+.tip .tv { display: flex; align-items: center; gap: 6px; }
+.tip b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.xl { display: flex; justify-content: space-between; margin: 6px 0 0 60px; color: var(--dim); font-size: 12px; }
 .stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; gap: 2px; margin: 12px 0 10px; }
 .stack i { display: block; height: 100%; }
 table.kv { width: 100%; border-collapse: collapse; font-size: 14px; }

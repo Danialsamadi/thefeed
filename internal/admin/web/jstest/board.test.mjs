@@ -50,6 +50,41 @@ check('7 days shows dates', chartAxis(new Date(2026, 9, 27, 12, 48), 10080, now)
 check('what a bar stands for, by range', [perStep(15), perStep(60), perStep(1440), perStep(10080)],
   ['per 15 seconds', 'per minute', 'per 24 minutes', 'per 2.8 hours']);
 
+// ===== linePaths: a Server chart's line and area, on a viewBox (points − 1) wide and 100 tall =====
+check('two points', linePaths([1, 2], 4), { line: 'M0 75L1 50', area: 'M0 100L0 75L1 50L1 100Z' });
+check('a gap breaks the line, and a lone point is a short flat stroke', linePaths([1, null, 2, 3], 4),
+  { line: 'M0 75L0.4 75M2 50L3 25', area: 'M0 100L0 75L0.4 75L0.4 100ZM2 100L2 50L3 25L3 100Z' });
+check('a lone point inside stays inside', linePaths([null, 2, null], 4).line, 'M0.6 50L1.4 50');
+check('over the top stays in the chart; below zero at the baseline', linePaths([9, -1], 6).line, 'M0 0L1 100');
+check('no samples: nothing drawn', linePaths([null, null], 6), { line: '', area: '' });
+check('three or more points curve, the wash closed along the same curve', linePaths([0, 4, 0], 4),
+  { line: 'M0 100C0.33 50 0.67 0 1 0C1.33 0 1.67 50 2 100', area: 'M0 100L0 100C0.33 50 0.67 0 1 0C1.33 0 1.67 50 2 100L2 100Z' });
+// segs is a path's curves as [start, control 1, control 2, end] heights.
+function segs(d) {
+  const out = [];
+  let at = null;
+  for (const [, cmd, args] of d.matchAll(/([MLC])([^MLC]*)/g)) {
+    const n = args.trim().split(' ').map(Number);
+    if (cmd === 'C') out.push([at, n[1], n[3], n[5]]);
+    at = n.at(-1);
+  }
+  return out;
+}
+const spike = segs(linePaths([0, 0, 100, 0, 0, 3, 2], 100).line);
+check('a spike next to zeros: each curve stays between its ends, so within 0–100 and no invented peaks',
+  spike.length === 6 && spike.every(([a, c1, c2, b]) => [c1, c2].every(c => c >= Math.min(a, b) && c <= Math.max(a, b))), true);
+check('a gap still breaks a curve', linePaths([1, 2, 3, null, 3, 2, 1], 4).line.match(/M/g).length, 2);
+
+// ===== niceMax: the CPU chart's top, so a quiet server's line isn't flat on the floor =====
+check('a quiet server', [niceMax(0), niceMax(1.2), niceMax(null)], [5, 5, 5]);
+check('a tenth of room above the peak', [niceMax(4.6), niceMax(9), niceMax(40), niceMax(46)], [10, 10, 50, 100]);
+check('never past 100%', [niceMax(95), niceMax(100)], [100, 100]);
+
+// ===== pointLabel: when a chart point was, in its tooltip =====
+check('seconds for 15-second points', pointLabel(new Date(2026, 10, 3, 11, 49, 45), 15, 2, now), '11:50:15');
+check('minutes for longer ones', pointLabel(new Date(2026, 10, 3, 11, 5), 60, 30, now), '11:35');
+check('a date before today', pointLabel(new Date(2026, 9, 27, 12, 48), 10080, 0, now), '27 Oct, 12:48');
+
 // ===== barPct: a chart bar's height, as a share of the chart's top =====
 check('half the scale', barPct(3, 6), 50);
 check('over the top stays in the chart', barPct(9, 6), 100);

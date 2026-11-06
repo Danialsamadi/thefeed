@@ -51,8 +51,63 @@ function perStep(step) {
   return step < 3600 ? `per ${step / 60} minutes` : `per ${+(step / 3600).toFixed(1)} hours`;
 }
 
-// barPct is a chart bar's height in percent of the chart's top, or null
-// for a point without a sample.
+// linePaths is a Server chart's points as SVG path data on a viewBox
+// (points − 1) wide and 100 tall, 0 at the top: line runs through the
+// points as a smooth curve, broken where one is null, and area closes each
+// run down to the baseline along the same curve. A lone point between gaps
+// becomes a short flat stroke, so it still shows.
+function linePaths(points, top) {
+  const y = v => 100 - Math.min(100, Math.max(0, v / top * 100)), last = points.length - 1, f = n => +n.toFixed(2);
+  let line = '', area = '', run = [];
+  const flush = () => {
+    if (run.length === 1) run = [[Math.max(0, run[0][0] - 0.4), run[0][1]], [Math.min(last, run[0][0] + 0.4), run[0][1]]];
+    if (run.length) {
+      const [x0, y0] = run[0], d = curve(run), xn = run.at(-1)[0];
+      line += `M${f(x0)} ${f(y0)}${d}`;
+      area += `M${f(x0)} 100L${f(x0)} ${f(y0)}${d}L${f(xn)} 100Z`;
+    }
+    run = [];
+  };
+  points.forEach((v, i) => (v == null ? flush() : run.push([i, y(v)])));
+  flush();
+  return { line, area };
+}
+
+// curve is the path on from the first of pts ([x, y], two or more) through
+// the rest: a straight line for two, else a monotone cubic (Fritsch–Carlson,
+// as d3's curveMonotoneX). Each piece stays between its two points, so the
+// line never overshoots the chart or shows a peak the samples don't have.
+function curve(pts) {
+  const n = pts.length, f = v => +v.toFixed(2);
+  if (n === 2) return `L${f(pts[1][0])} ${f(pts[1][1])}`;
+  const s = i => (pts[i + 1][1] - pts[i][1]) / (pts[i + 1][0] - pts[i][0]); // the slope from point i to i + 1
+  const m = pts.map((_, i) => (i === 0 || i === n - 1 ? 0
+    : (Math.sign(s(i - 1)) + Math.sign(s(i))) * Math.min(Math.abs(s(i - 1)), Math.abs(s(i)), Math.abs(s(i - 1) + s(i)) / 4) || 0));
+  m[0] = (3 * s(0) - m[1]) / 2;
+  m[n - 1] = (3 * s(n - 2) - m[n - 2]) / 2;
+  let d = '';
+  for (let i = 0; i < n - 1; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[i + 1], dx = (x1 - x0) / 3;
+    d += `C${f(x0 + dx)} ${f(y0 + dx * m[i])} ${f(x1 - dx)} ${f(y1 - dx * m[i + 1])} ${f(x1)} ${f(y1)}`;
+  }
+  return d;
+}
+
+// niceMax is the CPU chart's top for a peak of peak percent: the smallest
+// of 5, 10, 25, 50 and 100 that leaves a tenth of room above the peak.
+function niceMax(peak) {
+  return [5, 10, 25, 50, 100].find(t => t >= (peak ?? 0) * 1.1) ?? 100;
+}
+
+// pointLabel is when point i of a chart of step-second points from from
+// was: to the second for 15-second points, else as when() writes it.
+function pointLabel(from, step, i, now = new Date()) {
+  const t = new Date(new Date(from).getTime() + i * step * 1000);
+  return step < 60 ? `${hm(t)}:${two(t.getSeconds())}` : when(t, now);
+}
+
+// barPct is a bar's length in percent of its whole, or null for a point
+// without a sample.
 function barPct(v, top) {
   if (v == null) return null;
   return Math.round(Math.min(100, Math.max(0, v / top * 100)) * 10) / 10;

@@ -1,4 +1,5 @@
-// The Server page: the machine's CPU and network over a range, RAM and disk,
+// The Server page: the machine's CPU and network over a range as line
+// charts with a crosshair (pointer, touch or arrow keys), RAM and disk,
 // who can reach whom, thefeed-server's process and the recent server log
 // (GET /api/server, /api/logs/server), under the server's name, version and
 // uptime (GET /api/service). Read while the page shows. Pure helpers are in
@@ -12,6 +13,11 @@
   let svc = null;                 // GET /api/service: version, update, uptime
   let lines = null, logErr = '';  // the recent server log, newest first
   let ticks = 0;
+  // hover is the chart and point the crosshair is on, kept across the
+  // 5-second redraws; charts is what each chart drew, so the pointer and
+  // keys redraw only its crosshair and tooltip.
+  let hover = null;
+  const charts = {};
 
   const error = r => fieldErrors(r.data, [])[''];
   async function load(withLog) {
@@ -36,9 +42,67 @@
   const n0 = v => (v == null ? '–' : Math.round(v));
   const r = v => (v == null ? '–' : rate(v).join(' '));
   const size = b => { const u = b >= 2 ** 30 ? 'GB' : 'MB'; return `${inUnit(b, u)} ${u}`; };
-  // A point without a sample has no bar.
-  const bars = (points, top) => points.map(v => { const h = barPct(v, top); return h == null ? '<i style="visibility:hidden"></i>' : `<i style="height:${h}%"></i>`; }).join('');
+  const pct = v => `${+v.toFixed(1)}%`;
   const axis = () => `<div class="xl" aria-hidden="true">${chartAxis(srv.from, srv.step).map(l => `<span>${l}</span>`).join('')}</div>`;
+
+  // lineChart draws series [{name, points, s}], s being its colour slot,
+  // from 0 to top, with fmt writing a value: one series under a light wash,
+  // more with a legend. The labels are HTML beside an SVG stretched over the
+  // plot, so neither text nor line width stretches with it.
+  function lineChart(id, label, series, top, fmt) {
+    const n = series[0].points.length;
+    charts[id] = { series, top, fmt, n };
+    const grid = [top, top / 2, 0].map((v, k) => `<span class="gl" style="top:${k * 50}%"></span><span class="yl" style="top:${k * 50}%">${v ? fmt(v) : '0'}</span>`).join('');
+    const paths = series.map(s => {
+      const p = linePaths(s.points, top);
+      return `${series.length === 1 ? `<path class="area ${s.s}" d="${p.area}"/>` : ''}<path class="ln ${s.s}" d="${p.line}"/>`;
+    }).join('');
+    const keys = series.length > 1 ? `<div class="keys" aria-hidden="true">${series.map(s => `<span><i class="key ${s.s}"></i>${s.name}</span>`).join('')}</div>` : '';
+    return `<div class="lc" data-chart="${id}" data-k="lc-${id}" tabindex="0" role="img" aria-label="${esc(label)}">${keys}
+      <div class="plot">${grid}<svg viewBox="0 0 ${n - 1} 100" preserveAspectRatio="none" aria-hidden="true">${paths}</svg>
+      <div class="hov" aria-hidden="true">${overlay(id)}</div></div>${axis()}</div>`;
+  }
+  // overlay is a chart's crosshair, a dot on each line and the tooltip at
+  // the hovered point, values first; nothing while it isn't hovered.
+  function overlay(id) {
+    const c = charts[id];
+    if (!c || !srv || hover?.id !== id) return '';
+    const i = hover.i, x = i / (c.n - 1) * 100, y = v => 100 - Math.min(100, Math.max(0, v / c.top * 100)), many = c.series.length > 1;
+    const dots = c.series.map(s => (s.points[i] == null ? '' : `<span class="dot ${s.s}" style="left:${x}%;top:${y(s.points[i])}%"></span>`)).join('');
+    const rows = c.series.map(s => `<span class="tv">${many ? `<i class="key ${s.s}"></i>` : ''}<b>${s.points[i] == null ? 'no sample' : esc(c.fmt(s.points[i]))}</b>${many ? s.name.toLowerCase() : ''}</span>`).join('');
+    const side = x < 55 ? `left:calc(${x}% + 10px)` : `right:calc(${100 - x}% + 10px)`;
+    return `<span class="xh" style="left:${x}%"></span>${dots}<div class="tip" style="${side}">${rows}<span>${esc(pointLabel(srv.from, srv.step, i))}</span></div>`;
+  }
+  function point(id, i) {
+    if (hover?.id === id && hover?.i === i || hover == null && id == null) return;
+    hover = id == null ? null : { id, i };
+    document.querySelectorAll('.v-server .lc').forEach(el => { el.querySelector('.hov').innerHTML = overlay(el.dataset.chart); });
+  }
+  // The crosshair goes to the point nearest the pointer, and leaves with it;
+  // a tap keeps it until a tap elsewhere. Arrow keys, Home and End move it.
+  const root = document.getElementById('app');
+  const nearest = e => {
+    const lc = e.target.closest?.('.v-server .lc');
+    if (!lc) return e.type === 'pointerdown' && point(null);
+    const r = lc.querySelector('.plot').getBoundingClientRect(), n = charts[lc.dataset.chart].n;
+    point(lc.dataset.chart, Math.round(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (n - 1)));
+  };
+  root.addEventListener('pointermove', nearest);
+  root.addEventListener('pointerdown', nearest);
+  root.addEventListener('pointerout', e => {
+    if (e.pointerType !== 'touch' && e.target.closest?.('.lc') && !e.relatedTarget?.closest?.('.lc')) point(null);
+  });
+  root.addEventListener('focusout', e => { if (e.target.closest?.('.lc')) point(null); });
+  root.addEventListener('keydown', e => {
+    const lc = e.target.closest?.('.v-server .lc');
+    if (!lc) return;
+    const id = lc.dataset.chart, n = charts[id].n, i = hover?.id === id ? hover.i : n;
+    if (e.key === 'Escape') return point(null);
+    const to = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: n - 1 }[e.key];
+    if (to == null) return;
+    e.preventDefault();
+    point(id, Math.min(n - 1, Math.max(0, to)));
+  });
 
   function profile() {
     let state = '';
@@ -64,12 +128,12 @@
     return `<div class="srv-grid">
         <div class="sec"><h3>CPU use ${perStep(srv.step)}</h3>
           <p class="lead">Now <b>${n0(cpu.now)}%</b>. Average <b>${n0(cpu.avg)}%</b>, peak <b>${n0(cpu.peak)}%</b>.</p>
-          <div class="chart" aria-hidden="true"><span class="yl" style="top:0">100%</span><span class="yl" style="top:36px">50%</span><span class="grid" style="top:36px"></span>
-            <div class="bars">${bars(cpu.points, 100)}</div></div>${axis()}</div>
+          ${lineChart('cpu', `CPU use ${perStep(srv.step)}: now ${n0(cpu.now)}%, average ${n0(cpu.avg)}%, peak ${n0(cpu.peak)}%. Arrow keys move along it.`,
+            [{ name: 'CPU', points: cpu.points, s: 's1' }], niceMax(cpu.peak), pct)}</div>
         <div class="sec"><h3>Network ${perStep(srv.step)}</h3>
           <p class="lead">Out now <b>${r(net.outNow)}</b>, peak <b>${r(net.outPeak)}</b>. In <b>${r(net.inNow)}</b>. Today: <b>${size(net.sentToday)}</b> sent, <b>${size(net.receivedToday)}</b> received.</p>
-          <div class="chart" aria-hidden="true"><span class="yl" style="top:0">${r(net.scale)} out</span><span class="yl" style="top:88px">${r(net.scale)} in</span>
-            <div class="bars out">${bars(net.out, net.scale)}</div><div class="bars in">${bars(net.in, net.scale)}</div></div>${axis()}</div>
+          ${lineChart('net', `Network ${perStep(srv.step)}: out now ${r(net.outNow)}, peak ${r(net.outPeak)}; in now ${r(net.inNow)}. Arrow keys move along it.`,
+            [{ name: 'Out', points: net.out, s: 's1' }, { name: 'In', points: net.in, s: 's2' }], net.scale, r)}</div>
         <div class="sec"><h3>RAM: ${inUnit(ram.total - ram.free, 'MB')} of ${inUnit(ram.total, 'MB')} MB</h3>
           ${parts([['thefeed-server', ram.server, '--accent', 'MB'], ['Media cache', ram.mediaCache, '--dim', 'MB'], ['System', ram.system, '--track-edge', 'MB'], ['Free', ram.free, '--surface2', 'MB']], ram.total)}</div>
         <div class="sec"><h3>Disk: ${inUnit(disk.total - disk.free, 'GB')} of ${inUnit(disk.total, 'GB')} GB</h3>
