@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/sartoopjj/thefeed/internal/admin"
+	"github.com/sartoopjj/thefeed/internal/admin/alerts"
 	"github.com/sartoopjj/thefeed/internal/admin/health"
 	"github.com/sartoopjj/thefeed/internal/admin/logs"
 	"github.com/sartoopjj/thefeed/internal/admin/service"
@@ -29,6 +30,7 @@ import (
 
 // modules is the app wiring: each feature module is one line here.
 var modules = []admin.Module{
+	alerts.Module,
 	health.Module,
 	logs.Module,
 	service.Module,

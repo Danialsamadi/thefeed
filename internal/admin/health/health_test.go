@@ -85,6 +85,7 @@ func (f *fakeDNS) Query(_ context.Context, listen, domain string) (time.Duration
 type panel struct {
 	t      *testing.T
 	app    *admin.App
+	deps   *admin.Deps // to read what the module published
 	cookie *http.Cookie
 	srv    *fakeServer
 	dns    *fakeDNS
@@ -106,7 +107,7 @@ func newPanel(t *testing.T, start time.Time, st *controlapi.Status) *panel {
 	p := &panel{t: t, now: start, srv: &fakeServer{st: st, checks: map[string]*controlapi.CheckResult{}},
 		dns: &fakeDNS{took: map[string]time.Duration{}, err: map[string]error{}}}
 	cfg := admin.Config{AdminDir: t.TempDir(), Clock: admin.ClockFunc(p.clock)}
-	app, err := admin.New(cfg, health.New(p.srv, p.dns))
+	app, err := admin.New(cfg, health.New(p.srv, p.dns), func(d *admin.Deps) error { p.deps = d; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,6 +255,11 @@ func TestStoppedServerTakesEveryFeatureDown(t *testing.T) {
 	}
 	if b.Attention != 7 || b.Server.State != "stopped" || !b.Server.LastSeen.Equal(t0.Add(time.Minute)) || !b.Server.Since.Equal(t0.Add(2*time.Minute)) {
 		t.Errorf("attention %d, server %+v; want 7, stopped since 12:02, last seen 12:01", b.Attention, b.Server)
+	}
+	// Published for alerts too.
+	rs := p.deps.Readings()
+	if s, x := rs["server"], rs["feature.x"]; s.State != "stopped" || x.State != "down" || x.Name != "X (Twitter)" || !x.At.Equal(t0.Add(2*time.Minute)) {
+		t.Errorf("readings server %+v, feature.x %+v; want stopped, and X (Twitter) down at 12:02", s, x)
 	}
 
 	b = p.minute(func(st *controlapi.Status) { st.Server.Answering = false })

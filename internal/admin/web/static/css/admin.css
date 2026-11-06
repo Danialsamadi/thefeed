@@ -235,6 +235,9 @@ table.kv { width: 100%; border-collapse: collapse; font-size: 14px; }
 .it .tx b { display: block; font-weight: 500; }
 .it .tx small { display: block; color: var(--dim); font-size: 13px; }
 .it .tx small.bad { color: var(--down); }
+.it .tx b.bad { color: var(--down); }
+.alc { display: flex; align-items: center; gap: 8px; margin-left: auto; } /* an alert rule's fields and switch, kept together */
+.alc .numf .inp { width: 8ch; padding: 0 8px; }
 .it.confirm { background: color-mix(in srgb, var(--warn-fill) 12%, var(--surface)); }
 .acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .sw-btn { width: 60px; height: 44px; display: grid; place-items: center; flex: none; border-radius: 12px; }
