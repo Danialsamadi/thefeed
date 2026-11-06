@@ -1,6 +1,7 @@
 // Control, Server, Service and power: whether the server answers, the
 // process, start on boot, the version with update and roll back, and the
-// machine. Disruptive actions confirm in place and say what readers lose.
+// machine. Disruptive actions confirm in place, restart in a popup, and say
+// what readers lose.
 // While the server is silent or stopped, every top-level screen shows a
 // banner with the way back.
 'use strict';
@@ -22,7 +23,7 @@
   const C = (a, w = svcWords(svc ?? {})) => ({
     pause: { q: 'Stop answering queries?', why: 'The server stays up but goes silent: readers get no answers and Telegram tunnels close. Resume any time; a restart always comes back answering.', go: 'Stop answering', busy: 'Stopping answers…' },
     resume: { busy: 'Resuming…' },
-    restart: { q: 'Restart thefeed-server now?', why: 'Readers lose about 10 seconds of queries. Open Telegram tunnels reconnect on their own.', go: 'Restart now', busy: 'Restarting…' },
+    restart: { q: 'Restart thefeed-server now?', why: 'Readers lose about 10 seconds of queries. Open Telegram tunnels reconnect on their own.', go: 'Restart now' },
     stop: { q: 'Stop thefeed-server?', why: 'Everything stops: feed, messenger, tunnels and relays. This panel keeps running so you can start it again.', go: 'Stop server', danger: true, busy: 'Stopping…' },
     start: { busy: 'Starting…' },
     'boot-on': { busy: 'Turning start on boot on…' },
@@ -154,6 +155,7 @@
 
   Panel.acts.svc = b => {
     const a = b.dataset.a;
+    if (a === 'restart') return openRestart();
     if (!C(a).q) return run(a);
     [confirm, typed] = [a, ''];
     Panel.render();
@@ -165,6 +167,73 @@
   };
   Panel.acts['svc-cancel'] = cancel;
   Panel.acts['svc-boot'] = () => run(svc.boot ? 'boot-off' : 'boot-on');
+
+  // ---------- the restart popup ----------
+  // Restart…, here or on the notice of changes waiting, opens a popup over
+  // whatever is on screen: it confirms, restarts, then waits up to 30 s for
+  // the server to answer again (its control socket says what it listens on).
+  const dlg = document.createElement('dialog');
+  dlg.className = 'dlg';
+  dlg.tabIndex = -1;
+  dlg.setAttribute('aria-labelledby', 'rs-q');
+  dlg.setAttribute('aria-describedby', 'rs-line');
+  dlg.innerHTML = '<p class="st-line"><span class="sdot" aria-hidden="true"></span><b id="rs-q"></b></p><p class="impact" id="rs-line" role="status"></p><div class="acts"></div>';
+  document.getElementById('app').append(dlg);
+  let rs = { step: '', line: '' }, opener = '';
+  const back = () => svc?.state === 'running' && !!svc.listen;
+
+  function drawRestart() {
+    const c = C('restart'), s = rs.step;
+    const [cls, q] = { ask: ['s-ask', c.q], busy: ['s-busy', 'Restarting…'], done: ['s-ok', 'Back up'],
+      late: ['s-warn', 'Not answering yet'], fail: ['s-down', "Couldn't restart"] }[s];
+    const btn = (a, label, quiet) => `<button class="btn${quiet ? ' quiet' : ''}" type="button" data-act="${a}" data-k="${a}">${label}</button>`;
+    dlg.className = `dlg ${cls}`;
+    dlg.querySelector('#rs-q').textContent = q;
+    dlg.querySelector('#rs-line').textContent = s === 'ask' ? c.why : rs.line;
+    dlg.querySelector('.acts').innerHTML = s === 'ask' ? btn('rs-close', 'Cancel', 1) + btn('rs-go', c.go)
+      : s === 'fail' ? btn('rs-close', 'Close', 1) + btn('rs-go', 'Try again') : s === 'busy' ? '' : btn('rs-close', 'Close');
+    (dlg.querySelector('[data-k="rs-go"]') || dlg.querySelector('[data-k="rs-close"]') || dlg).focus();
+  }
+
+  function openRestart() {
+    opener = document.activeElement?.closest('[data-k]')?.dataset.k || '';
+    if (rs.step !== 'busy') rs = { step: 'ask', line: '' };
+    dlg.showModal();
+    drawRestart();
+  }
+
+  async function restart() {
+    rs = { step: 'busy', line: 'Readers lose about 10 seconds of queries.' };
+    drawRestart();
+    const t0 = Date.now(), r = await Panel.api('POST', '/api/service/restart', {});
+    if (!r?.ok) {
+      rs = { step: 'fail', line: r?.data.errors?.[0]?.message || "The panel couldn't reach thefeed-server. Try again." };
+      return drawRestart();
+    }
+    svc = r.data;
+    rs.line = 'Restarted. Waiting for it to answer…';
+    drawRestart();
+    while (!back() && Date.now() - t0 < 30000) {
+      await new Promise(f => setTimeout(f, 1000));
+      const g = await Panel.api('GET', '/api/service');
+      if (g?.ok) svc = g.data;
+    }
+    rs = back() ? { step: 'done', line: `Answering on ${svc.listen} again. It took ${Math.max(1, Math.round((Date.now() - t0) / 1000))} s.` }
+      : { step: 'late', line: "It restarted but hasn't answered for 30 seconds. The Board shows what's failing." };
+    Ctl.load();
+    Panel.render();
+    if (dlg.open) drawRestart();
+  }
+
+  Panel.acts['rs-go'] = restart;
+  Panel.acts['rs-close'] = () => dlg.close();
+  // Esc closes the popup, not the page behind it; while restarting it stays.
+  dlg.addEventListener('keydown', e => { if (e.key === 'Escape') e.stopPropagation(); });
+  dlg.addEventListener('cancel', e => { if (rs.step === 'busy') e.preventDefault(); });
+  dlg.addEventListener('close', () => {
+    if (rs.step !== 'busy') rs.step = '';
+    [...document.querySelectorAll(`#app [data-k="${CSS.escape(opener)}"]`)].find(el => el.getClientRects().length)?.focus();
+  });
 
   async function loadLink() {
     [link, linkErr, copied] = ['', '', ''];
