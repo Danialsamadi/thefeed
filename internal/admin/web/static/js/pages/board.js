@@ -17,6 +17,21 @@
   let shown = null;                // the page drawn last: a new one slides in
   let edit = null;                 // the Nitter editor while open: {value, err, busy}
   let ticks = 0;
+  // The badge on Board counts what needs attention and hasn't been seen on
+  // the Board yet, like a notification (seenNow, in board-util.js). Kept
+  // in this browser.
+  const SEEN = 'thefeed-admin.seen';
+  let seen = [];
+  try { seen = JSON.parse(localStorage.getItem(SEEN)) || []; } catch { /* storage off: this visit only */ }
+  function unseen() {
+    if (!board) return 0;
+    const next = seenNow(board.features, seen, S.view === 'board' && !document.hidden);
+    if (next.join() !== seen.join()) {
+      seen = next;
+      try { localStorage.setItem(SEEN, JSON.stringify(seen)); } catch { /* this visit only */ }
+    }
+    return attentionKeys(board.features).filter(k => !seen.includes(k)).length;
+  }
 
   // The API's states are ok, slow, down and off; the mockup's classes call slow warn.
   // A Nitter instance resting after HTTP 429 is amber too.
@@ -161,7 +176,7 @@
   Panel.view('board', {
     loading: 'the board',
     render: () => (board ? list() : failed ? `<div class="state" role="alert"><b>Couldn't load the board</b><span>${esc(failed)}</span></div>` : null),
-    count: () => board?.attention || 0,
+    count: unseen,
     detail: page,
     open(id) {
       [edit, shown] = [null, null];

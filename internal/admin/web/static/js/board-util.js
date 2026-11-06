@@ -24,6 +24,20 @@ function upLegend(u) {
   return parts.map(([n, what], i) => (i ? `${n} ${what}` : `${plural(n, 'day', 'days')} ${what}`)).join(', ');
 }
 
+// attentionKeys is each feature that needs attention as "id:state", so a
+// feature getting worse (slow to down) is a new key.
+function attentionKeys(features) {
+  return features.filter(f => f.state === 'slow' || f.state === 'down').map(f => `${f.id}:${f.state}`);
+}
+
+// seenNow is the Board badge's seen keys after a look at features: all of
+// them while the Board is in view; otherwise those of seen still needing
+// attention, so a feature that recovered counts again when it next fails.
+function seenNow(features, seen, looking) {
+  const keys = attentionKeys(features);
+  return looking ? keys : keys.filter(k => seen.includes(k));
+}
+
 const two = n => String(n).padStart(2, '0');
 const hm = d => `${two(d.getHours())}:${two(d.getMinutes())}`;
 const dayMonth = d => `${d.getDate()} ${'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ')[d.getMonth()]}`;
