@@ -20,6 +20,7 @@ func Module(d *admin.Deps) error {
 		// Only the panel's own files run or load. Inline style attributes stay
 		// allowed for chart bar heights; inline scripts don't.
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFileFS(w, r, files, "static/index.html")
 	}))
 	// Files only: a directory would get the shell without its CSP, or a listing.
@@ -29,6 +30,9 @@ func Module(d *admin.Deps) error {
 			http.NotFound(w, r)
 			return
 		}
+		// Embedded files have no date, so a browser could keep an old one
+		// after an update; no-cache makes it ask every time.
+		w.Header().Set("Cache-Control", "no-cache")
 		assets.ServeHTTP(w, r)
 	}))
 	return nil

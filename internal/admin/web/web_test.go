@@ -80,6 +80,16 @@ func TestShellAssetsAndPagesAreServed(t *testing.T) {
 			t.Errorf("GET %s = %d %q, want 200 %s", p, w.Code, w.Header().Get("Content-Type"), ct)
 		}
 	}
+	// After an update, a browser must not keep showing the old page: the
+	// shell and every asset are checked with the panel each time.
+	for p := range refs {
+		if cc := get(h, p).Header().Get("Cache-Control"); cc != "no-cache" {
+			t.Errorf("GET %s: Cache-Control %q, want no-cache", p, cc)
+		}
+	}
+	if cc := get(h, "/").Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Errorf("GET /: Cache-Control %q, want no-cache", cc)
+	}
 }
 
 // The shell is served at / only. A mistyped API path is a 404, not the shell:
