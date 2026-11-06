@@ -467,6 +467,38 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	a.startSession(w, r, adm.Username)
 }
 
+// checkPassword is the operator typing the password again before an action
+// that reaches root, so a stolen session cookie alone can't do it. It
+// answers the request itself when the password is missing or wrong; a
+// wrong one counts toward the sign-in lockout.
+func (a *App) checkPassword(w http.ResponseWriter, r *http.Request, pass string) bool {
+	if pass == "" {
+		WriteError(w, http.StatusForbidden, FieldError{"password", "Type your password to do this."})
+		return false
+	}
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+	if d := a.lockedFor(); d > 0 {
+		writeLocked(w, d)
+		return false
+	}
+	var adm adminRecord
+	if ok, err := a.auth.Get("admin", &adm); err != nil || !ok {
+		WriteError(w, http.StatusInternalServerError, FieldError{Message: "Couldn't read the admin account."})
+		return false
+	}
+	if bcrypt.CompareHashAndPassword(adm.Hash, []byte(pass)) == nil {
+		a.auth.Delete("failures")
+		return true
+	}
+	if left, _ := a.failed(r, "password to confirm an action"); left == 0 {
+		writeLocked(w, lockFor)
+		return false
+	}
+	WriteError(w, http.StatusForbidden, FieldError{"password", "That isn't your password."})
+	return false
+}
+
 func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(cookieName); err == nil {
 		a.sessions.Delete(tokenKey(c.Value))

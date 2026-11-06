@@ -169,6 +169,12 @@ type panel struct {
 
 const origin = "https://panel.test"
 
+// pass is the admin's password; pw is the body of an action that asks for
+// it again.
+const pass = "correct horse battery"
+
+var pw = map[string]string{"password": pass}
+
 // newPanel is the real admin app with the service module on m, signed in.
 // edits change its options, such as dropping the fake release source.
 func newPanel(t *testing.T, m *machine, edits ...func(*service.Options)) *panel {
@@ -433,13 +439,13 @@ func TestUpdateWithoutAMatchingChecksumIsRefused(t *testing.T) {
 	m.publish("sartoopjj/thefeed", "v0.41.1", "v0.41.1")
 	m.assets["sartoopjj/thefeed/v0.41.1/"+asset] = []byte("v0.41.1 with something extra")
 
-	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
+	_, msg := p.errorOf(p.do("POST", "/api/service/update", pw), http.StatusBadGateway)
 	if !strings.Contains(msg, "SHA256SUMS") {
 		t.Errorf("error = %q, want it to name SHA256SUMS", msg)
 	}
 
 	m.assets["sartoopjj/thefeed/v0.41.1/SHA256SUMS"] = []byte("0f343b0931126a20f133d67c2b018a3b2a8f1d4f7b0b2a4bfc3c1d0f5a1e2b3c  thefeed-admin-linux-amd64\n")
-	_, msg = p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
+	_, msg = p.errorOf(p.do("POST", "/api/service/update", pw), http.StatusBadGateway)
 	if !strings.Contains(msg, asset) {
 		t.Errorf("error = %q, want it to name %s", msg, asset)
 	}
@@ -463,7 +469,7 @@ func TestUpdateSwapsBinariesAndRestarts(t *testing.T) {
 	p := newPanel(t, m)
 	m.publish("sartoopjj/thefeed", "v0.41.1", "v0.41.1")
 
-	s := p.act("update", nil)
+	s := p.act("update", pw)
 
 	m.wantCmds("restart thefeed-server")
 	if got, prev := m.read(m.bin), m.read(m.bin+".previous"); got != "v0.41.1" || prev != "v0.41.0" {
@@ -488,7 +494,7 @@ func TestUnhealthyUpdateRollsBack(t *testing.T) {
 	m.publish("sartoopjj/thefeed", "v0.41.1", "crash")
 	start := m.now
 
-	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
+	_, msg := p.errorOf(p.do("POST", "/api/service/update", pw), http.StatusBadGateway)
 
 	if !strings.Contains(msg, "60 seconds") || !strings.Contains(msg, "v0.41.0") {
 		t.Errorf("error = %q, want it to say v0.41.1 wasn't healthy in 60 seconds and v0.41.0 is back", msg)
@@ -512,12 +518,12 @@ func TestUnhealthyUpdateRollsBack(t *testing.T) {
 func TestRollBackPutsThePreviousVersionBack(t *testing.T) {
 	m := newMachine(t, "v0.41.0")
 	p := newPanel(t, m)
-	p.errorOf(p.do("POST", "/api/service/rollback", struct{}{}), http.StatusConflict)
+	p.errorOf(p.do("POST", "/api/service/rollback", pw), http.StatusConflict)
 	m.publish("sartoopjj/thefeed", "v0.41.1", "v0.41.1")
-	p.act("update", nil)
+	p.act("update", pw)
 	m.cmds = nil
 
-	s := p.act("rollback", nil)
+	s := p.act("rollback", pw)
 
 	m.wantCmds("restart thefeed-server")
 	if got := m.read(m.bin); got != "v0.41.0" || m.running != "v0.41.0" {
@@ -547,18 +553,18 @@ func TestNoUpdateOrRollbackBelowTheFloor(t *testing.T) {
 		{"../../evil", http.StatusBadGateway, `Couldn't find the newest release of sartoopjj/thefeed: "../../evil" isn't a release version`},
 	} {
 		m.latest["sartoopjj/thefeed"] = c.latest
-		if _, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), c.code); !strings.HasPrefix(msg, c.want) {
+		if _, msg := p.errorOf(p.do("POST", "/api/service/update", pw), c.code); !strings.HasPrefix(msg, c.want) {
 			t.Errorf("update with %q the newest: %q, want %q", c.latest, msg, c.want)
 		}
 	}
 	m.wantCmds()
 
 	m.publish("sartoopjj/thefeed", "v0.41.0", "v0.41.0")
-	if s := p.act("update", nil); s.Previous != "v0.40.0" {
+	if s := p.act("update", pw); s.Previous != "v0.40.0" {
 		t.Fatalf("previous = %q, want v0.40.0", s.Previous)
 	}
 	m.cmds = nil
-	_, msg := p.errorOf(p.do("POST", "/api/service/rollback", struct{}{}), http.StatusConflict)
+	_, msg := p.errorOf(p.do("POST", "/api/service/rollback", pw), http.StatusConflict)
 	if !strings.Contains(msg, "v0.40.1-rc0") {
 		t.Errorf("rollback refused with %q, want it to name v0.40.1-rc0", msg)
 	}
@@ -629,19 +635,45 @@ func TestReleaseSourceCanBeChanged(t *testing.T) {
 	}
 
 	for _, bad := range []string{"fork", "https://github.com/fork/thefeed", "fork/the feed", "a/b/c"} {
-		if field, _ := p.errorOf(p.do("POST", "/api/service/source", map[string]string{"repo": bad}), http.StatusBadRequest); field != "repo" {
+		if field, _ := p.errorOf(p.do("POST", "/api/service/source", map[string]string{"repo": bad, "password": pass}), http.StatusBadRequest); field != "repo" {
 			t.Errorf("repo %q: error on %q, want repo", bad, field)
 		}
 	}
-	if s := p.act("source", map[string]string{"repo": " fork/thefeed "}); s.Source != "fork/thefeed" || s.Latest != "v0.41.5" || !s.Update {
+	if s := p.act("source", map[string]string{"repo": " fork/thefeed ", "password": pass}); s.Source != "fork/thefeed" || s.Latest != "v0.41.5" || !s.Update {
 		t.Fatalf("state = %+v, want fork/thefeed offering v0.41.5", s)
 	}
-	if s := p.act("source", map[string]string{"repo": ""}); s.Source != "sartoopjj/thefeed" {
+	if s := p.act("source", map[string]string{"repo": "", "password": pass}); s.Source != "sartoopjj/thefeed" {
 		t.Fatalf("source = %q after clearing it, want the default", s.Source)
 	}
 	if got, want := p.actions(), []string{"Release source: sartoopjj/thefeed", "Release source: fork/thefeed"}; !slices.Equal(got, want) {
 		t.Fatalf("action record = %q, want %q", got, want)
 	}
+}
+
+// A session cookie alone can't change what runs as root: updating, rolling
+// back and changing the release source each take the password again, and
+// wrong ones count toward the sign-in lockout.
+func TestRootLevelActionsNeedThePassword(t *testing.T) {
+	m := newMachine(t, "v0.41.0")
+	p := newPanel(t, m)
+	m.publish("sartoopjj/thefeed", "v0.41.1", "v0.41.1")
+
+	for _, a := range []string{"update", "rollback", "source"} {
+		for _, try := range []string{"", "not it at all"} {
+			if field, _ := p.errorOf(p.do("POST", "/api/service/"+a, map[string]string{"repo": "evil/thefeed", "password": try}), http.StatusForbidden); field != "password" {
+				t.Errorf("%s with password %q: error on %q, want password", a, try, field)
+			}
+		}
+	}
+	m.wantCmds()
+	if s := p.state(p.do("GET", "/api/service", nil)); s.Source != "sartoopjj/thefeed" || s.Version != "v0.41.0" {
+		t.Fatalf("state = %+v, want nothing changed", s)
+	}
+	// Three wrong passwords so far (an empty one isn't a try); two more lock
+	// signing in too.
+	p.errorOf(p.do("POST", "/api/service/update", map[string]string{"password": "not it at all"}), http.StatusForbidden)
+	p.errorOf(p.do("POST", "/api/service/update", map[string]string{"password": "not it at all"}), http.StatusTooManyRequests)
+	p.errorOf(p.do("POST", "/api/auth/login", map[string]string{"username": "admin", "password": pass}), http.StatusTooManyRequests)
 }
 
 func TestStoppedServerSaysSinceWhen(t *testing.T) {
@@ -708,7 +740,7 @@ func TestReleasesCanComeFromAnotherAddress(t *testing.T) {
 	if s := p.state(p.do("GET", "/api/service", nil)); s.Latest != "v0.41.1" || !s.Update {
 		t.Fatalf("state = %+v, want v0.41.1 found at %s", s, gh.URL)
 	}
-	p.act("update", nil)
+	p.act("update", pw)
 	if got := m.read(m.bin); got != "v0.41.1" || m.running != "v0.41.1" {
 		t.Fatalf("binary %q, running %q; want v0.41.1 from %s", got, m.running, gh.URL)
 	}

@@ -1,12 +1,14 @@
 // Control, Server settings, Fetching: how often channels are fetched, how
-// many posts each keeps, and the Telegram login with Log out, which
-// restarts the server. Everything applies after a restart.
+// many posts each keeps, and the Telegram login with Log out, which asks
+// for the password and restarts the server. Everything applies after a
+// restart.
 'use strict';
 (() => {
   const C = Ctl.C;
   const STEPS = { 'fetch.every': [3, 5, 10, 15, 20, 30, 60], 'fetch.msgs': [5, 10, 15, 20, 25, 30, 35, 40, 45, 50] };
   let confirm = false; // the Log out confirm replaces the login row
   let busy = false;    // logging out, then restarting
+  let pwErr = '';      // why the password was turned down
 
   function step(key, label, help, unit, fewer, more) {
     const v = +Ctl.val(key), id = Ctl.fid(key), ok = d => stepTo(STEPS[key], v, d) != null && !Ctl.off();
@@ -18,8 +20,9 @@
     const t = C.st.telegram;
     if (busy) return '<div class="it"><div class="tx"><b>Telegram login</b><small>Logging out, then restarting…</small></div></div>';
     if (confirm) {
-      return `<div class="it confirm danger"><div class="tx"><b>Log out of Telegram?</b><small>The server restarts: readers lose about 10 seconds of queries. Private channels stop updating; public channels keep working without a login.</small></div>
-        <div class="acts"><button class="btn quiet" type="button" data-act="c-login-cancel" data-k="login-cancel">Cancel</button><button class="btn danger" type="button" data-act="c-login-go" data-k="login-go">Log out</button></div></div>`;
+      return `<form class="it confirm danger" data-form="c-login-go" novalidate><div class="tx"><b>Log out of Telegram?</b><small>The server restarts: readers lose about 10 seconds of queries. Private channels stop updating; public channels keep working without a login. Logging in again needs SSH to the server.</small>
+          ${pwField('login-pw', pwErr)}</div>
+        <div class="acts"><button class="btn quiet" type="button" data-act="c-login-cancel" data-k="login-cancel">Cancel</button><button class="btn danger" type="submit" data-k="login-go">Log out</button></div></form>`;
     }
     if (!t.loggedIn) {
       return `<div class="it"><div class="tx"><b>Telegram login</b><small>${Ctl.after('Logged out', 'fetch.noTelegram')}. Public channels are read without it. To log in, run <code>thefeed-server --login-only</code> on the server.</small></div></div>`;
@@ -52,15 +55,20 @@
     if (v != null) Ctl.save(key, String(v));
   };
   Panel.acts['c-login-out'] = () => {
-    confirm = true;
+    [confirm, pwErr] = [true, ''];
     Ctl.render();
-    Ctl.focus('login-go');
+    Ctl.focus('login-pw');
   };
   Panel.acts['c-login-cancel'] = cancel;
-  Panel.acts['c-login-go'] = async () => {
+  Panel.forms['c-login-go'] = async f => {
     [confirm, busy] = [false, true];
     Ctl.render();
-    const r = await Ctl.call('POST', '/api/settings/telegram-logout', {});
+    const r = await Ctl.call('POST', '/api/settings/telegram-logout', { password: f.elements.password.value });
+    if (pwRefused(r)) {
+      [confirm, busy, pwErr] = [true, false, Ctl.error(r)];
+      Ctl.render();
+      return Ctl.focus('login-pw');
+    }
     // The restart is Service and power's, which works in either mode.
     const re = r?.ok && await Panel.api('POST', '/api/service/restart', {});
     busy = false;

@@ -372,14 +372,19 @@ func (m *mod) act(w http.ResponseWriter, r *http.Request) {
 	}
 	defer m.mu.Unlock()
 	var body struct {
-		Domain string `json:"domain"`
-		Repo   string `json:"repo"`
+		Domain   string `json:"domain"`
+		Repo     string `json:"repo"`
+		Password string `json:"password"` // what runs as root, and where from, asks for it again
 	}
 	if !admin.ReadJSON(w, r, &body) {
 		return
 	}
+	name := r.PathValue("action")
+	if (name == "update" || name == "rollback" || name == "source") && !m.d.CheckPassword(w, r, body.Password) {
+		return
+	}
 	var err error
-	switch name := r.PathValue("action"); name {
+	switch name {
 	case "update":
 		err = m.update(ctx)
 	case "rollback":

@@ -82,6 +82,17 @@ function svcWords(svc) {
   };
 }
 
+// pwField is the operator's password, asked again before an action that
+// reaches root (checkPassword in internal/admin/auth.go), with err under it.
+function pwField(id, err) {
+  return `<label class="hint" for="${id}">Your password</label><input class="inp" id="${id}" name="password" type="password" autocomplete="current-password" data-k="${id}"${err ? ` aria-invalid="true" aria-describedby="${id}-e"` : ''}>
+    ${err ? `<p class="err" id="${id}-e" role="alert">${esc(err)}</p>` : ''}`;
+}
+
+// pwRefused is true when an API answer turned the password down: wrong,
+// missing, or too many tries.
+const pwRefused = r => r?.status === 429 || r?.data.errors?.[0]?.field === 'password';
+
 // esc makes any value safe to put in HTML text or a quoted attribute.
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
