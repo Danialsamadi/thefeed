@@ -1,5 +1,5 @@
 // Control, This panel, Account: who is signed in and since when, Log out,
-// Change password, and every session signed in now.
+// Change password, and every session signed in now, each with an End.
 'use strict';
 (() => {
   const S = Panel.S;
@@ -16,14 +16,15 @@
     if (sessions === null) return '<div class="it"><div class="tx"><small>Loading sessions…</small></div></div>';
     if (sessions === false) return '<div class="it"><div class="tx"><small class="bad">Couldn\'t load the sessions. Open Account again to retry.</small></div></div>';
     return sessions.map(s => `<div class="it"><div class="tx"><b>${esc(clientLabel(s.client))}</b>
-      <small>${s.current ? `This device. Signed in ${when(s.since)}.` : `Signed in ${when(s.since)}. Last used ${when(s.lastSeen)}.`}</small></div></div>`).join('');
+      <small>${s.current ? 'This device. ' : ''}Signed in ${when(s.since)}${s.current ? '' : `, last used ${when(s.lastSeen)}`}. Ends ${when(s.expires)} if left idle.</small></div>
+      ${s.current ? '' : `<button class="btn quiet" type="button" data-act="acct-end" data-id="${esc(s.id)}" data-k="end-${esc(s.id)}">End</button>`}</div>`).join('');
   }
 
   Panel.section({
     group: 'This panel', id: 'acct', title: 'Account',
     summary: () => `${S.me.username}, signed in since ${when(S.me.since)}`,
     open: load,
-    render: () => Panel.sec('Signed in', `<div class="it"><div class="tx"><b>${esc(S.me.username)}</b><small>Since ${when(S.me.since)} on this device. A session ends after 8 hours without use.</small></div>
+    render: () => Panel.sec('Signed in', `<div class="it"><div class="tx"><b>${esc(S.me.username)}</b><small>Since ${when(S.me.since)} on this device. It logs out after 30 minutes without a click or key press.</small></div>
           <button class="btn quiet" type="button" data-act="logout" data-k="logout">Log out</button></div>`,
         "The panel keeps this account in its own database on the server and stores the password only as a hash. There's one admin, and no other way in.")
       + Panel.sec('Change password', `<form class="addf chpw" data-form="pw" novalidate>
@@ -33,8 +34,17 @@
           ${Panel.formError('pw')}
           <div class="acts"><button class="btn" type="submit" data-k="pw-go"${Panel.formOff('pw')}>${S.busy === 'pw' ? 'Changing the password…' : 'Change password'}</button></div></form>`,
         'Changing it logs out every other session.')
-      + Panel.sec('Sessions', sessionRows(), 'Every browser signed in now. Each one ends after 8 hours without use, or 7 days after signing in.'),
+      + Panel.sec('Sessions', sessionRows(), 'Every browser signed in now. Each one ends after 30 minutes without a click or key press, and 12 hours after signing in.'),
   });
+
+  Panel.acts['acct-end'] = async b => {
+    const s = sessions?.find(x => x.id === b.dataset.id), label = s ? clientLabel(s.client) : 'that browser';
+    b.disabled = true;
+    const r = await Panel.api('POST', '/api/account/sessions/end', { id: b.dataset.id });
+    if (r) Panel.say(r.ok ? `Ended the session on ${label}. It has to log in again.` : r.data.errors?.[0]?.message || "Couldn't end the session. Try again.");
+    await load();
+    document.querySelector('.v-control [data-k="pmsg"]')?.focus();
+  };
 
   Panel.forms.pw = async () => {
     const r = await Panel.submit('pw', '/api/auth/password', ['current', 'password', 'repeat']);

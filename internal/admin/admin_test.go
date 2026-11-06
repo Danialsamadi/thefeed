@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -212,21 +213,87 @@ func TestLoginLockout(t *testing.T) {
 	}
 }
 
+// poll asks what the page's own refresh asks: the session, saying how long
+// ago the operator last clicked or typed.
+func (p *panel) poll(c *http.Cookie, idle time.Duration) int {
+	req := httptest.NewRequest("GET", origin+"/api/auth/session", nil)
+	req.Header.Set("X-Idle-Seconds", strconv.Itoa(int(idle.Seconds())))
+	req.AddCookie(c)
+	w := httptest.NewRecorder()
+	p.app.Handler().ServeHTTP(w, req)
+	return w.Code
+}
+
+// Polls don't count as use: an open tab nobody touches signs out after 30
+// minutes.
 func TestSessionExpiresWhenIdle(t *testing.T) {
 	p := newPanel(t)
 	c := p.signUp()
+	p.now = p.now.Add(29 * time.Minute)
+	if code := p.poll(c, 29*time.Minute); code != 200 {
+		t.Fatalf("29 min idle = %d, want 200", code)
+	}
+	p.now = p.now.Add(time.Minute)
+	if code := p.poll(c, 30*time.Minute); code != 401 {
+		t.Fatalf("30 min idle, polled all along = %d, want 401", code)
+	}
+}
 
-	p.now = p.now.Add(7 * time.Hour)
-	if w := p.do("GET", "/api/auth/session", "", c); w.Code != 200 {
-		t.Fatalf("after 7 h = %d", w.Code)
+// A click or key press restarts the 30 minutes; nothing outlives 12 hours.
+func TestUseKeepsTheSessionUpTo12Hours(t *testing.T) {
+	p := newPanel(t)
+	c := p.signUp()
+	for i := 1; i <= 28; i++ { // 28 × 25 min = 11 h 40 min
+		p.now = p.now.Add(25 * time.Minute)
+		if code := p.poll(c, 0); code != 200 {
+			t.Fatalf("used every 25 min, after %v = %d, want 200", time.Duration(i)*25*time.Minute, code)
+		}
 	}
-	p.now = p.now.Add(7 * time.Hour) // 14 h old, but used 7 h ago
-	if w := p.do("GET", "/api/auth/session", "", c); w.Code != 200 {
-		t.Fatalf("use must keep the session alive: %d", w.Code)
+	p.now = p.now.Add(25 * time.Minute)
+	if code := p.poll(c, 0); code != 401 {
+		t.Fatalf("12 h 5 min after logging in = %d, want 401", code)
 	}
-	p.now = p.now.Add(8 * time.Hour)
-	if w := p.do("GET", "/api/auth/session", "", c); w.Code != 401 {
-		t.Fatalf("after 8 h idle = %d, want 401", w.Code)
+}
+
+// Account lists each session with when it expires, and ends any of them.
+func TestEndASession(t *testing.T) {
+	p := newPanel(t)
+	mine := p.signUp()
+	other := cookieOf(t, p.login(pass))
+
+	var list struct {
+		Sessions []struct {
+			ID      string
+			Current bool
+			Expires time.Time
+		}
+	}
+	if err := json.Unmarshal(p.do("GET", "/api/account/sessions", "", mine).Body.Bytes(), &list); err != nil || len(list.Sessions) != 2 {
+		t.Fatalf("session list = %+v, %v; want 2 sessions", list, err)
+	}
+	id := ""
+	for _, s := range list.Sessions {
+		if !s.Expires.Equal(p.now.Add(30 * time.Minute)) {
+			t.Errorf("session expires %v, want 30 min after logging in", s.Expires)
+		}
+		if !s.Current {
+			id = s.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("no id for the other session")
+	}
+	if w := p.do("POST", "/api/account/sessions/end", `{"id":"`+id+`"}`, mine); w.Code != 200 {
+		t.Fatalf("end the other session = %d %s", w.Code, w.Body)
+	}
+	if w := p.do("GET", "/api/auth/session", "", other); w.Code != 401 {
+		t.Fatalf("ended session = %d, want 401", w.Code)
+	}
+	if w := p.do("GET", "/api/auth/session", "", mine); w.Code != 200 {
+		t.Fatalf("own session = %d, want 200", w.Code)
+	}
+	if w := p.do("POST", "/api/account/sessions/end", `{"id":"`+id+`"}`, mine); w.Code != 404 {
+		t.Fatalf("end it again = %d, want 404", w.Code)
 	}
 }
 

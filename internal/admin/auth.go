@@ -31,8 +31,8 @@ import (
 
 const (
 	cookieName   = "thefeed_admin"
-	idleLimit    = 8 * time.Hour
-	sessionLimit = 7 * 24 * time.Hour
+	idleLimit    = 30 * time.Minute // without a click or key press in the panel
+	sessionLimit = 12 * time.Hour
 	codeLife     = 24 * time.Hour
 	maxFails     = 5
 	lockFor      = 5 * time.Minute
@@ -69,9 +69,16 @@ type session struct {
 	Client   string    `json:"client"`
 }
 
-func (s session) live(now time.Time) bool {
-	return now.Sub(s.LastSeen) < idleLimit && now.Sub(s.Created) < sessionLimit
+// expires is when the session ends unless it's used before then.
+func (s session) expires() time.Time {
+	idle, limit := s.LastSeen.Add(idleLimit), s.Created.Add(sessionLimit)
+	if idle.Before(limit) {
+		return idle
+	}
+	return limit
 }
+
+func (s session) live(now time.Time) bool { return now.Before(s.expires()) }
 
 func setupCodePath(dir string) string { return filepath.Join(dir, "setup-code") }
 
@@ -260,23 +267,33 @@ func (a *App) lookupSession(r *http.Request) (current, bool) {
 		a.sessions.Delete(key)
 		return current{}, false
 	}
+	// Last-seen is the operator's last click or key press, which the page
+	// sends as X-Idle-Seconds, so its polls don't count as use. Without the
+	// header (curl, say) the request itself is the use.
+	seen := now
+	if idle, err := strconv.Atoi(r.Header.Get("X-Idle-Seconds")); err == nil && idle > 0 {
+		seen = now.Add(-time.Duration(min(idle, int(sessionLimit.Seconds()))) * time.Second)
+	}
 	// Last-seen is written at most once a minute, so a UI polling
 	// every 5 seconds doesn't fsync each poll; idle timing is ±1 minute.
 	// The touch re-reads inside its write transaction, so a session that a
 	// logout or password change deleted meanwhile isn't written back.
-	if now.Sub(s.LastSeen) >= time.Minute {
+	if seen.Sub(s.LastSeen) >= time.Minute {
 		alive := false
 		a.sessions.Update(func(b *bolt.Bucket) error {
 			raw := b.Get([]byte(key))
 			if raw == nil || json.Unmarshal(raw, &s) != nil || !s.live(now) {
 				return nil
 			}
-			s.LastSeen = now
+			alive = true
+			if !seen.After(s.LastSeen) {
+				return nil
+			}
+			s.LastSeen = seen
 			raw, err := json.Marshal(s)
 			if err != nil {
 				return err
 			}
-			alive = true
 			return b.Put([]byte(key), raw)
 		})
 		if !alive {
@@ -522,8 +539,10 @@ func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	cur := r.Context().Value(sessionCtx{}).(current)
 	type row struct {
+		ID       string    `json:"id"` // for POST /api/account/sessions/end
 		Since    time.Time `json:"since"`
 		LastSeen time.Time `json:"lastSeen"`
+		Expires  time.Time `json:"expires"`
 		Client   string    `json:"client"`
 		Current  bool      `json:"current"`
 	}
@@ -534,11 +553,40 @@ func (a *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(raw, &s) != nil || !s.live(now) {
 			return true
 		}
-		rows = append(rows, row{s.Created, s.LastSeen, s.Client, string(k) == cur.key})
+		rows = append(rows, row{sessionID(k), s.Created, s.LastSeen, s.expires(), s.Client, string(k) == cur.key})
 		return false
 	})
 	sort.Slice(rows, func(i, j int) bool { return rows[i].LastSeen.After(rows[j].LastSeen) })
 	WriteJSON(w, http.StatusOK, map[string]any{"sessions": rows})
+}
+
+// sessionID names a session to the page: the start of its key, which is
+// itself a hash of the token.
+func sessionID(key []byte) string { return string(key[:16]) }
+
+// handleEndSession ends the session the list gave as id.
+func (a *App) handleEndSession(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ID string `json:"id"`
+	}
+	if !ReadJSON(w, r, &in) {
+		return
+	}
+	ended := false
+	err := a.sessions.deleteWhere(func(k, _ []byte) bool {
+		hit := len(k) >= 16 && sessionID(k) == in.ID
+		ended = ended || hit
+		return hit
+	})
+	switch {
+	case err != nil:
+		WriteError(w, http.StatusInternalServerError, FieldError{Message: "Couldn't end the session."})
+	case !ended:
+		WriteError(w, http.StatusNotFound, FieldError{Message: "That session has already ended."})
+	default:
+		log.Printf("admin: a session ended from %s", clientAddr(r))
+		WriteJSON(w, http.StatusOK, map[string]any{})
+	}
 }
 
 // --- request checks used by Handler ---

@@ -169,6 +169,7 @@ func (a *App) init() (err error) {
 	a.mux.Handle("GET /api/auth/session", a.signedIn(a.handleSession))
 	a.mux.Handle("POST /api/auth/password", a.signedIn(a.handlePassword))
 	a.mux.Handle("GET /api/account/sessions", a.signedIn(a.handleSessions))
+	a.mux.Handle("POST /api/account/sessions/end", a.signedIn(a.handleEndSession))
 	a.mux.Handle("GET /api/actions", a.signedIn(a.handleActions))
 	return nil
 }
