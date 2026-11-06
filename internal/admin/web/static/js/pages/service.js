@@ -13,12 +13,15 @@
   let busy = '';      // the action running from this page
   let said = null;    // [text, bad]: how the last action went, until the next one
   let srcErr = '';    // the release source form's error
+  let src = '';       // the release source typed, waiting on its confirm
+  let pwErr = '';     // why the password was turned down
   // The readers' import link holds the key: fetched when the page opens, so
   // Copy writes it within the click, as Safari wants; never polled.
   let link = '', linkErr = '', copied = '', copiedT; // copied: '', 'ok' or 'fail'
 
   // Each action's confirm: q, why and go; danger tints it red, typed asks for
-  // the domain. Without q it runs at once. busy is the status line meanwhile.
+  // the domain, pw for the password. Without q it runs at once. busy is the
+  // status line meanwhile.
   const C = (a, w = svcWords(svc ?? {})) => ({
     pause: { q: 'Stop answering queries?', why: 'The server stays up but goes silent: readers get no answers and Telegram tunnels close. Resume any time; a restart always comes back answering.', go: 'Stop answering', busy: 'Stopping answers…' },
     resume: { busy: 'Resuming…' },
@@ -30,8 +33,9 @@
     reboot: { q: 'Reboot the machine?', why: 'Readers get no answers for about a minute. This panel reconnects when the machine is back.', go: 'Reboot', busy: 'Rebooting the machine…' },
     shutdown: { q: 'Shut down the machine?', why: "Everything stops, this panel too. Only your hosting provider's console can turn it on again.", go: 'Shut down', danger: true, typed: true, busy: 'Shutting down…' },
     update: { q: `Update to ${svc?.latest} now?`, why: `${w.update} Readers lose about 10 seconds of queries. You can roll back afterwards.`, go: 'Update now',
-      busy: `Updating to ${svc?.latest}: ${w.updating}…` },
-    rollback: { q: 'Roll back to the previous version?', why: `${w.rollback} Readers lose about 10 seconds of queries.`, go: 'Roll back', busy: `Rolling back to ${svc?.previous}…` },
+      pw: true, busy: `Updating to ${svc?.latest}: ${w.updating}…` },
+    rollback: { q: 'Roll back to the previous version?', why: `${w.rollback} Readers lose about 10 seconds of queries.`, go: 'Roll back', pw: true, busy: `Rolling back to ${svc?.previous}…` },
+    source: { q: `Get updates from ${src.trim() || 'the default source'}?`, why: 'Updates from it run as root on this machine.', go: 'Save', pw: true, busy: 'Saving the release source…' },
     'fix-unit': { q: 'Move these flags into thefeed.env and restart?', why: 'Readers lose about 10 seconds of queries. The old unit is kept as thefeed-server.service.bak in the data directory.',
       go: 'Move and restart', busy: 'Moving the flags, then restarting…' },
   }[a]);
@@ -50,14 +54,22 @@
     Panel.render();
     document.querySelector('.v-control [data-k="svc-status"]')?.focus();
     const r = await Panel.api('POST', `/api/service/${a}`, body);
-    busy = '';
+    [busy, pwErr] = ['', ''];
     if (r?.ok) svc = r.data;
     if (r?.ok && a === 'shutdown') said = ["The machine is shutting down. Only your hosting provider's console turns it back on.", false];
+    if (r?.ok && a === 'source') [srcErr, said] = ['', [`Updates now come from ${svc.source}.`, false]];
     if (r && !r.ok) {
-      said = [r.data.errors?.[0]?.message || "The panel couldn't do that. Try again.", true];
+      const e = r.data.errors?.[0] || {}, msg = e.message || "The panel couldn't do that. Try again.";
+      // A turned-down password keeps the confirm open, to type it again.
+      if (pwRefused(r)) [confirm, pwErr] = [a, msg];
+      else if (e.field === 'repo') srcErr = msg;
+      else said = [msg, true];
       load();
     }
     Panel.render();
+    const el = document.querySelector(`.v-control [data-k="${pwErr ? 'svc-pw' : srcErr ? 'svc-src' : 'svc-status'}"]`);
+    if (pwErr && el) el.value = '';
+    el?.focus();
   }
 
   const since = (word = 'since') => (svc.since ? ` ${word} ${when(svc.since)}` : '');
@@ -73,11 +85,13 @@
       <button class="btn quiet" type="button" data-act="svc" data-a="${a}" data-k="svcq-${where}"${busy ? ' disabled' : ''}>${busy === a ? esc(C(a).busy) : paused ? 'Resume answering' : 'Start server'}</button></div></div>`;
   });
 
+  // A confirm is a form, so Enter in its field confirms.
   function confirmRow(a) {
     const c = C(a), ok = !c.typed || domainOK();
-    return `<div class="it confirm${c.danger ? ' danger' : ''}"><div class="tx"><b>${esc(c.q)}</b><small>${c.why}</small>
-        ${c.typed ? `<label class="hint" for="svc-typed">Type ${esc(svc.domain)} to confirm</label><input class="inp" id="svc-typed" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(typed)}" data-k="svc-typed">` : ''}</div>
-      <div class="acts"><button class="btn quiet" type="button" data-act="svc-cancel" data-k="svc-cancel">Cancel</button><button class="btn${c.danger ? ' danger' : ''}" type="button" data-act="svc-go" data-a="${a}" data-k="svc-go"${ok ? '' : ' disabled'}>${c.go}</button></div></div>`;
+    return `<form class="it confirm${c.danger ? ' danger' : ''}" data-form="svc-go" data-a="${a}" novalidate><div class="tx"><b>${esc(c.q)}</b><small>${c.why}</small>
+        ${c.typed ? `<label class="hint" for="svc-typed">Type ${esc(svc.domain)} to confirm</label><input class="inp" id="svc-typed" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(typed)}" data-k="svc-typed">` : ''}
+        ${c.pw ? pwField('svc-pw', pwErr) : ''}</div>
+      <div class="acts"><button class="btn quiet" type="button" data-act="svc-cancel" data-k="svc-cancel">Cancel</button><button class="btn${c.danger ? ' danger' : ''}" type="submit" data-k="svc-go"${ok ? '' : ' disabled'}>${c.go}</button></div></form>`;
   }
 
   function page() {
@@ -99,8 +113,8 @@
       (svc.update ? `${esc(svc.latest)} is available. Updating restarts the server.` : svc.latest ? 'The newest release.' : `Couldn't check ${esc(svc.source)} for a newer release.`)
         + (prev ? ` If something broke, go back to ${prev}.` : ''),
       [...(svc.update ? [['update', 'Update…']] : []), ...(prev ? [['rollback', `Roll back to ${prev}…`]] : [])]);
-    const source = `<form class="addf" data-form="svcsrc" novalidate><label for="svc-src">Release source</label>
-        <div class="addrow"><input class="inp" id="svc-src" name="repo" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(svc.source)}" data-k="svc-src" aria-describedby="svc-src-h"${srcErr ? ' aria-invalid="true"' : ''}${off}>
+    const source = confirm === 'source' ? confirmRow('source') : `<form class="addf" data-form="svcsrc" novalidate><label for="svc-src">Release source</label>
+        <div class="addrow"><input class="inp" id="svc-src" name="repo" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(srcErr ? src : svc.source)}" data-k="svc-src" aria-describedby="svc-src-h"${srcErr ? ' aria-invalid="true"' : ''}${off}>
         <button class="btn quiet" type="submit" data-k="svc-src-go"${off}>Save</button></div>
         <p class="${srcErr ? 'err' : 'hint'}" id="svc-src-h"${srcErr ? ' role="alert"' : ''}>${srcErr ? esc(srcErr) : 'The GitHub owner/repo updates come from. Leave it empty for the one the installer used.'}</p></form>`;
 
@@ -128,9 +142,9 @@
 
   function cancel() {
     const a = confirm;
-    confirm = '';
+    [confirm, pwErr] = ['', ''];
     Panel.render();
-    document.querySelector(`.v-control [data-k="svc-${a}"]`)?.focus();
+    document.querySelector(`.v-control [data-k="${a === 'source' ? 'svc-src' : `svc-${a}`}"]`)?.focus();
   }
 
   Panel.section({
@@ -155,13 +169,14 @@
   Panel.acts.svc = b => {
     const a = b.dataset.a;
     if (!C(a).q) return run(a);
-    [confirm, typed] = [a, ''];
+    [confirm, typed, pwErr] = [a, '', ''];
     Panel.render();
-    document.querySelector(`.v-control [data-k="${C(a).typed ? 'svc-typed' : 'svc-go'}"]`)?.focus();
+    document.querySelector(`.v-control [data-k="${C(a).typed ? 'svc-typed' : C(a).pw ? 'svc-pw' : 'svc-go'}"]`)?.focus();
   };
-  Panel.acts['svc-go'] = b => {
-    const a = b.dataset.a;
-    run(a, a === 'shutdown' ? { domain: typed } : {});
+  Panel.forms['svc-go'] = f => {
+    const a = f.dataset.a, password = f.elements.password?.value;
+    if (a === 'shutdown' && !domainOK()) return;
+    run(a, a === 'shutdown' ? { domain: typed } : a === 'source' ? { repo: src, password } : { password });
   };
   Panel.acts['svc-cancel'] = cancel;
   Panel.acts['svc-boot'] = () => run(svc.boot ? 'boot-off' : 'boot-on');
@@ -189,13 +204,11 @@
     if (copied === 'ok') copiedT = setTimeout(() => { copied = ''; Panel.render(); }, 2500);
     else document.querySelector('.v-control [data-k="svc-linkbox"]')?.select();
   };
-  Panel.forms.svcsrc = async f => {
-    const r = await Panel.api('POST', '/api/service/source', { repo: f.elements.repo.value });
-    if (r?.ok) {
-      [svc, srcErr] = [r.data, ''];
-      Panel.say(`Updates now come from ${r.data.source}.`);
-    } else if (r) srcErr = r.data.errors?.[0]?.message || "The panel couldn't save that. Try again.";
+  // Saving the release source confirms first, with the password.
+  Panel.forms.svcsrc = f => {
+    [src, confirm, pwErr] = [f.elements.repo.value, 'source', ''];
     Panel.render();
+    document.querySelector('.v-control [data-k="svc-pw"]')?.focus();
   };
   // The shutdown button waits for the domain, letter for letter.
   document.getElementById('app').addEventListener('input', e => {

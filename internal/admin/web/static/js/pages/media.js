@@ -4,6 +4,7 @@
 'use strict';
 (() => {
   let form = false, err = '', saved = false; // the token form; its error; a new token saved this visit
+  let pwErr = '';                             // why the password was turned down
 
   function token() {
     if (!form) {
@@ -15,18 +16,19 @@
     return `<form class="addf" data-form="c-token" novalidate><label for="c-tok">New GitHub token</label>
       <input class="inp" id="c-tok" name="value" type="password" autocomplete="off" data-k="c-tok" aria-describedby="c-tok-h"${err ? ' aria-invalid="true"' : ''}>
       <p class="${err ? 'err' : 'hint'}" id="c-tok-h"${err ? ' role="alert"' : ''}>${err ? esc(err) : `Needs contents: write on ${repo ? esc(repo) : 'the repository'}. Stored on the server, never shown again.`}</p>
+      ${pwField('c-tok-pw', pwErr)}
       <div class="acts"><button class="btn quiet" type="button" data-act="c-token-cancel" data-k="token-cancel">Cancel</button><button class="btn" type="submit" data-k="token-save"${Ctl.off()}>Save token</button></div></form>`;
   }
 
   function close() {
-    [form, err] = [false, ''];
+    [form, err, pwErr] = [false, '', ''];
     Ctl.render();
     Ctl.focus('token');
   }
 
   Ctl.section({
     group: 'Features', id: 'media', title: 'Media relays',
-    open() { [form, err] = [false, '']; },
+    open() { [form, err, pwErr] = [false, '', '']; },
     escape() {
       if (!form) return false;
       close();
@@ -46,18 +48,19 @@
   });
 
   Panel.acts['c-token'] = () => {
-    [form, err] = [true, ''];
+    [form, err, pwErr] = [true, '', ''];
     Ctl.render();
     Ctl.focus('c-tok');
   };
   Panel.acts['c-token-cancel'] = close;
   Panel.forms['c-token'] = async f => {
-    const r = await Ctl.call('POST', '/api/settings/github-token', { value: f.elements.value.value });
+    const r = await Ctl.call('POST', '/api/settings/github-token', { value: f.elements.value.value, password: f.elements.password.value });
     if (!r) return;
     if (!r.ok) {
-      err = Ctl.error(r);
+      const pw = pwRefused(r);
+      [err, pwErr] = pw ? ['', Ctl.error(r)] : [Ctl.error(r), ''];
       Ctl.render();
-      return Ctl.focus('c-tok');
+      return Ctl.focus(pw ? 'c-tok-pw' : 'c-tok');
     }
     saved = true;
     Panel.say('New token saved. The relay uses it after a restart.');

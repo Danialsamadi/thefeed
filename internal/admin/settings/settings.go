@@ -134,7 +134,7 @@ func (m *module) telegram(f *files) telegramView {
 // the service module for next.
 func (m *module) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var req change
-	if !admin.ReadJSON(w, r, &req) {
+	if !admin.ReadJSON(w, r, &req) || !m.d.CheckPassword(w, r, req.Password) {
 		return
 	}
 	s, _ := serverconfig.Lookup("fetch.noTelegram")
@@ -297,6 +297,9 @@ func (m *module) handleGet(w http.ResponseWriter, r *http.Request) {
 type change struct {
 	Value string            `json:"value"`
 	Base  map[string]string `json:"base"`
+	// The GitHub token and the Telegram logout only: the operator's
+	// password, asked again.
+	Password string `json:"password"`
 	// Lists only: what to do, to which item (by its place, from 0) and,
 	// for a move, its new place.
 	Op    string `json:"op"`
@@ -346,6 +349,9 @@ func (m *module) handleToken(w http.ResponseWriter, r *http.Request) {
 	value := strings.TrimSpace(req.Value)
 	if !githubToken.MatchString(value) {
 		admin.WriteError(w, http.StatusBadRequest, admin.FieldError{Field: tokenKey, Message: "That doesn't look like a GitHub token. Tokens start with ghp_ or github_pat_."})
+		return
+	}
+	if !m.d.CheckPassword(w, r, req.Password) {
 		return
 	}
 	s, _ := serverconfig.Lookup(tokenKey)

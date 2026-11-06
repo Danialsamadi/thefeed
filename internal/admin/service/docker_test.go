@@ -329,7 +329,7 @@ func TestDockerErrorsSayWhatTheEngineSaid(t *testing.T) {
 	// A pull answers 200 and fails inside its stream; nothing else happens.
 	e.calls = nil
 	env := m.read(e.env)
-	_, msg = p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
+	_, msg = p.errorOf(p.do("POST", "/api/service/update", pw), http.StatusBadGateway)
 	if want := "Couldn't pull ghcr.io/sartoopjj/thefeed-server:v0.41.1: manifest unknown"; msg != want {
 		t.Errorf("update: %q, want %q", msg, want)
 	}
@@ -409,7 +409,7 @@ func TestDockerUpdatePullsAndRecreates(t *testing.T) {
 	e.calls = nil
 	m.now = m.now.Add(time.Minute)
 
-	s := p.act("update", nil)
+	s := p.act("update", pw)
 
 	e.wantCalls(slices.Concat([]string{pull + "v0.41.1"}, recreate)...)
 	if len(e.created) != 1 || !reflect.DeepEqual(e.created[0], recreated(t, "v0.41.1")) {
@@ -442,7 +442,7 @@ func TestDockerUnhealthyUpdateGoesBack(t *testing.T) {
 	e.calls = nil
 	start := m.now
 
-	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
+	_, msg := p.errorOf(p.do("POST", "/api/service/update", pw), http.StatusBadGateway)
 
 	if !strings.Contains(msg, "60 seconds") || !strings.Contains(msg, "v0.41.0") {
 		t.Errorf("error = %q, want it to say v0.41.1 wasn't healthy in 60 seconds and v0.41.0 is back", msg)
@@ -477,7 +477,7 @@ func TestDockerUpdateThatCantGoBackStillRestoresTheEnvFile(t *testing.T) {
 	e.fail["POST /containers/create?name=thefeed-server"] = "driver failed programming external connectivity: port 5300 is already allocated"
 	env := m.read(e.env)
 
-	_, msg := p.errorOf(p.do("POST", "/api/service/update", struct{}{}), http.StatusBadGateway)
+	_, msg := p.errorOf(p.do("POST", "/api/service/update", pw), http.StatusBadGateway)
 
 	if !strings.Contains(msg, "putting v0.41.0 back failed") || !strings.Contains(msg, "port 5300 is already allocated") {
 		t.Errorf("error = %q, want it to say putting v0.41.0 back failed, and why", msg)
@@ -494,14 +494,14 @@ func TestDockerRollBackRecreatesOnThePreviousTag(t *testing.T) {
 	m := newMachine(t, "v0.41.0")
 	e := newEngine(t, m)
 	p := newPanel(t, m, e.options)
-	p.errorOf(p.do("POST", "/api/service/rollback", struct{}{}), http.StatusConflict)
+	p.errorOf(p.do("POST", "/api/service/rollback", pw), http.StatusConflict)
 	e.registry[image+":v0.41.1"] = "v0.41.1"
 	m.latest["sartoopjj/thefeed"] = "v0.41.1"
-	p.act("update", nil)
+	p.act("update", pw)
 	delete(e.images, image+":v0.41.0")
 	e.calls = nil
 
-	s := p.act("rollback", nil)
+	s := p.act("rollback", pw)
 
 	e.wantCalls(slices.Concat([]string{pull + "v0.41.0"}, recreate)...)
 	if len(e.created) != 2 || !reflect.DeepEqual(e.created[1], recreated(t, "v0.41.0")) {
@@ -533,7 +533,7 @@ func TestDockerUpdateFromLatestWithoutAnEnvFile(t *testing.T) {
 	e.registry[image+":v0.41.1"] = "v0.41.1"
 	m.latest["sartoopjj/thefeed"] = "v0.41.1"
 
-	p.act("update", nil)
+	p.act("update", pw)
 	if got := m.read(e.env); got != "THEFEED_SERVER_TAG=v0.41.1\n" {
 		t.Fatalf(".env = %q, want THEFEED_SERVER_TAG=v0.41.1", got)
 	}
@@ -542,7 +542,7 @@ func TestDockerUpdateFromLatestWithoutAnEnvFile(t *testing.T) {
 	}
 
 	e.calls = nil
-	s := p.act("rollback", nil)
+	s := p.act("rollback", pw)
 	e.wantCalls(slices.Concat([]string{pull + "v0.41.0"}, recreate)...)
 	if got := m.read(e.env); got != "THEFEED_SERVER_TAG=v0.41.0\n" || m.running != "v0.41.0" || s.Version != "v0.41.0" {
 		t.Fatalf(".env %q, running %q, state %+v; want v0.41.0 back", got, m.running, s)

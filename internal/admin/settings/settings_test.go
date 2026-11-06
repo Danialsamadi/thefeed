@@ -109,6 +109,9 @@ type panel struct {
 	cookie *http.Cookie
 }
 
+// pass is the admin's password.
+const pass = "correct horse battery"
+
 // newPanel is the real admin app with the settings module, signed in, on a
 // data directory holding files (name → content), each dated before the
 // server started.
@@ -132,7 +135,7 @@ func newPanel(t *testing.T, files map[string]string) *panel {
 		t.Fatal(err)
 	}
 	w := p.do("POST", "/api/auth/setup", map[string]string{"code": strings.TrimSpace(string(code)), "username": "admin",
-		"password": "correct horse battery", "repeat": "correct horse battery"})
+		"password": pass, "repeat": pass})
 	for _, c := range w.Result().Cookies() {
 		if c.Name == "thefeed_admin" && c.Value != "" {
 			p.cookie = c
@@ -716,7 +719,7 @@ func TestTheGitHubTokenIsReplacedButNeverEchoed(t *testing.T) {
 		t.Fatalf("thefeed.env changed:\n%s", got)
 	}
 
-	w := p.do("POST", "/api/settings/github-token", map[string]any{"value": newToken, "base": p.state().Base})
+	w := p.do("POST", "/api/settings/github-token", map[string]any{"value": newToken, "base": p.state().Base, "password": pass})
 
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), newToken) || strings.Contains(w.Body.String(), token) {
 		t.Fatalf("got %d, with a token in it?\n%s", w.Code, w.Body)
@@ -736,7 +739,7 @@ func TestTelegramLogoutTurnsTheLoginOffAndDeletesTheSession(t *testing.T) {
 		t.Fatal("logged out before the logout")
 	}
 
-	s := p.decode(p.do("POST", "/api/settings/telegram-logout", map[string]any{"base": p.state().Base}), http.StatusOK)
+	s := p.decode(p.do("POST", "/api/settings/telegram-logout", map[string]any{"base": p.state().Base, "password": pass}), http.StatusOK)
 
 	if !s.RestartNeeded || s.Telegram.LoggedIn {
 		t.Errorf("restartNeeded %v, loggedIn %v; want true, false", s.RestartNeeded, s.Telegram.LoggedIn)
@@ -749,6 +752,27 @@ func TestTelegramLogoutTurnsTheLoginOffAndDeletesTheSession(t *testing.T) {
 	}
 	if a := p.actions(); len(a) != 1 || a[0].Action != "Logged out of Telegram" || a[0].Outcome != "Session deleted, restart needed" {
 		t.Fatalf("action record = %+v", a)
+	}
+}
+
+// Replacing the GitHub token and logging out of Telegram take the password
+// again; without it nothing changes.
+func TestTheTokenAndTelegramLogoutNeedThePassword(t *testing.T) {
+	for _, path := range []string{"/api/settings/github-token", "/api/settings/telegram-logout"} {
+		p := sourcesPanel(t)
+		for try, msg := range map[string]string{"": "Type your password to do this.", "not it at all": "That isn't your password."} {
+			p.refused(p.do("POST", path, map[string]any{"value": "github_pat_11ABCDEFG0123456789_abcdefghijklmnop", "base": p.state().Base, "password": try}),
+				http.StatusForbidden, "password", msg)
+		}
+		if got := p.read("thefeed.env"); got != envFile {
+			t.Errorf("%s: thefeed.env changed:\n%s", path, got)
+		}
+		if _, err := os.Stat(filepath.Join(p.dir, "session.json")); err != nil {
+			t.Errorf("%s: session.json: %v, want it kept", path, err)
+		}
+		if a := p.actions(); len(a) != 0 {
+			t.Errorf("%s: action record = %+v, want nothing", path, a)
+		}
 	}
 }
 

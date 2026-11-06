@@ -100,6 +100,13 @@ func (d *Deps) HandlePublic(pattern string, h http.Handler) { d.app.mux.Handle(p
 // Bucket returns the module's bucket called name, creating it if needed.
 func (d *Deps) Bucket(name string) (*Bucket, error) { return newBucket(d.app.db, name) }
 
+// CheckPassword asks for the operator's password again, for an action that
+// reaches root. When it's missing or wrong it answers the request itself
+// and returns false.
+func (d *Deps) CheckPassword(w http.ResponseWriter, r *http.Request, password string) bool {
+	return d.app.checkPassword(w, r, password)
+}
+
 // Record appends a to the action record. A zero At means now.
 func (d *Deps) Record(a Action) error { return d.app.record(a) }
 
