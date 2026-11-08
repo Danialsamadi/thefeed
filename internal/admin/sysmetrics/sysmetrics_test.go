@@ -119,7 +119,12 @@ func (r *rig) start() {
 		Every:     func(every time.Duration, f func()) { r.timers[every] = f },
 		Server:    fakeServer{r},
 		Resolvers: m4,
-		Journal: func(context.Context) ([]byte, error) {
+		// Like the real commands and Docker calls, the fakes refuse a context
+		// that's already done.
+		Journal: func(ctx context.Context) ([]byte, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if r.journal == "" {
 				return nil, errors.New("exec: \"journalctl\": executable file not found in $PATH")
 			}
@@ -127,7 +132,7 @@ func (r *rig) start() {
 		},
 	}
 	if r.logPath != "" {
-		m.LogPath = func(context.Context) (string, error) { return r.logPath, nil }
+		m.LogPath = func(ctx context.Context) (string, error) { return r.logPath, ctx.Err() }
 	}
 	cfg := admin.Config{AdminDir: r.adminDir, ServerDataDir: dataDir, Clock: admin.ClockFunc(func() time.Time { return r.now })}
 	app, err := admin.New(cfg, sysmetrics.New(m), func(d *admin.Deps) error { r.deps = d; return nil })
