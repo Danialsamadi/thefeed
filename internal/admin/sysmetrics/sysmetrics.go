@@ -566,7 +566,11 @@ func (s *module) page(w http.ResponseWriter, r *http.Request) {
 
 	if total, free, err := s.m.Statfs(s.dataDir); err == nil {
 		p.Disk = disk{Total: total, Free: min(free, total)}
+		// Its own budget: the status one is spent, and journalctl or Docker
+		// given a done context answer nothing.
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		p.Disk.ReportsLogs = min(s.reportsAndLogs(ctx), total-p.Disk.Free)
+		cancel()
 		p.Disk.SystemData = total - p.Disk.Free - p.Disk.ReportsLogs
 	}
 
